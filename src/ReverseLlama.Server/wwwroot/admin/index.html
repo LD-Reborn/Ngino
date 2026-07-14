@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReverseLlama Admin</title>
+  <link rel="stylesheet" href="/admin/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">RL</span>
+        <span>
+          <strong>ReverseLlama</strong>
+          <small>Admin</small>
+        </span>
+      </div>
+      <nav class="nav" aria-label="Admin sections">
+        <a href="#clients" data-nav="clients">Clients</a>
+        <a href="#models" data-nav="models">Models</a>
+        <a href="#api-keys" data-nav="api-keys">API keys</a>
+      </nav>
+      <div class="sidebar-meta" id="sidebarMeta">Loading</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">Clients</h1>
+          <p id="pageSubtitle">Connected tunnel clients and forwarding controls.</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="button secondary" id="refreshButton" type="button">Refresh</button>
+          <form method="post" action="/admin/logout">
+            <button class="button secondary" type="submit">Logout</button>
+          </form>
+        </div>
+      </header>
+
+      <section id="notice" class="notice" hidden></section>
+      <section id="content" class="content" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <script src="/admin/app.js" defer></script>
+</body>
+</html>
