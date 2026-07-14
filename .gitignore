@@ -9,3 +9,4 @@
 .vs/
 **appsettings.Development.json
 !**/appsettings.Example.json
+debug/**

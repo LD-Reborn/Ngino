@@ -1,10 +1,38 @@
 # ReverseLlama
 
-(Eigenentwicklung; weitesgehend vibecoded)
+ReverseLlama is a small outbound HTTP tunnel for running Ollama (or vLLM, etc.) on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
 
-ReverseLlama is a small outbound HTTP tunnel for testing Ollama on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
+The client opens and maintains a WebSocket connection to the server. The server accepts normal HTTP requests and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
 
-The client opens a WebSocket connection to the server. The server accepts normal HTTP requests and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
+<table>
+<tr>
+<td><img src="docs/README_architecture.png" width="1400" alt="client-server architecture visualized using arrows"></td>
+<td>
+
+The server provides
+- An API with
+  - Authentication via API keys
+  - Authorization (planned)
+- Load balancing (Scale your AI strategy horizontally!)
+- (Ollama-only) Model management (install, remove, load, unload models)
+- Client monitoring
+  - Who is active
+  - What models are running
+  - How many requests is each client processing
+  - How many requests has each client processed
+- Group management (planned)
+  - Who can access which models
+  - What clients are mapped to which groups
+- Billing (planned)
+  - (planned) Price per model per thousand tokens
+  - (planned) Usage per API user
+  - (planned) Rate limiting
+
+The client provides a persistent outbound connection to the server and forwards requests to the local Ollama (or vLLM, etc.) instance. Responses stream back through the tunnel with minimal overhead.
+
+</td>
+</tr>
+</table>
 
 ## Projects
 
