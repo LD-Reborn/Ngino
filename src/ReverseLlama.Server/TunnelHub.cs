@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
+using System.Threading;
 using ReverseLlama.Protocol;
 
 namespace ReverseLlama.Server;
@@ -9,6 +10,7 @@ internal sealed class TunnelHub
     private readonly ConcurrentDictionary<string, TunnelConnection> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<TunnelHub> _logger;
     private readonly ILoggerFactory _loggerFactory;
+    private long _roundRobinCounter;
 
     public TunnelHub(ILogger<TunnelHub> logger, ILoggerFactory loggerFactory)
     {
@@ -40,17 +42,23 @@ internal sealed class TunnelHub
             var withModel = allOpen.Where(connection => connection.HasModel(model)).ToList();
             if (withModel.Count > 0)
             {
-                return withModel
-                    .OrderBy(connection => connection.PendingRequestCount)
-                    .ThenBy(connection => connection.ClientId, StringComparer.OrdinalIgnoreCase)
-                    .First();
+                return PickBest(withModel);
             }
         }
 
-        return allOpen
-            .OrderBy(connection => connection.PendingRequestCount)
-            .ThenBy(connection => connection.ClientId, StringComparer.OrdinalIgnoreCase)
-            .First();
+        return PickBest(allOpen);
+    }
+
+    private TunnelConnection PickBest(List<TunnelConnection> candidates)
+    {
+        var tick = (int)(Interlocked.Increment(ref _roundRobinCounter) & 0x7FFFFFFF);
+
+        return candidates
+            .Select((connection, index) => (connection, index))
+            .OrderBy(x => x.connection.PendingRequestCount)
+            .ThenBy(x => (tick + x.index) % candidates.Count)
+            .First()
+            .connection;
     }
 
     /// <summary>The only open connection, or null when zero or more than one client is connected.</summary>
