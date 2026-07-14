@@ -230,13 +230,21 @@ if [[ ! -d "$CLIENT_SRC" ]]; then
     die "Client source not found at $CLIENT_SRC. Run this script from the repository or pass --install-dir."
 fi
 
-info "Building ReverseLlama client (self-contained, linux-x64)..."
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64)  DOTNET_RID="linux-x64" ;;
+    aarch64) DOTNET_RID="linux-arm64" ;;
+    armv7l)  DOTNET_RID="linux-arm" ;;
+    *)       die "Unsupported architecture: $ARCH" ;;
+esac
+
+info "Building ReverseLlama client (self-contained, $DOTNET_RID)..."
 BUILD_DIR="$(mktemp -d /tmp/reversellama-build.XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 "$DOTNET_CMD" publish "$CLIENT_SRC/ReverseLlama.Client.csproj" \
     -c Release \
-    -r linux-x64 \
+    -r "$DOTNET_RID" \
     --self-contained true \
     -o "$BUILD_DIR"
 
