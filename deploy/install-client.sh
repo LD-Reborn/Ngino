@@ -90,6 +90,30 @@ if [[ $EUID -ne 0 ]]; then
     die "This script must be run as root (or with sudo)."
 fi
 
+# ── Find dotnet binary ──────────────────────────────────────────────────────
+find_dotnet() {
+    local candidates=(
+        "$(command -v dotnet 2>/dev/null || true)"
+        /usr/share/dotnet/dotnet
+        /usr/bin/dotnet
+        /usr/local/bin/dotnet
+        /usr/local/share/dotnet/dotnet
+        "$HOME/.dotnet/dotnet"
+    )
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        local invoke_home
+        invoke_home="$(eval echo "~$SUDO_USER")"
+        candidates+=("$invoke_home/.dotnet/dotnet")
+    fi
+    for c in "${candidates[@]}"; do
+        if [[ -n "$c" && -x "$c" ]]; then
+            echo "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ── Check / install .NET 10 SDK ──────────────────────────────────────────────
 install_dotnet() {
     info "Installing .NET 10 SDK..."
@@ -120,7 +144,7 @@ install_dotnet() {
                     ;;
             esac
         else
-            die "Unsupported distro. Install .NET 10 SDK manually: https://dotnet.microsoft.com/download"
+            die "Unsupported distro. Install .NET 10 SDK manually: https://dotnet.microsoft.com/download/dotnet/10.0"
         fi
 
         # Add Microsoft package repository GPG key and repo
@@ -149,19 +173,13 @@ REPO
         $PKG_MGR install -y dotnet-sdk-10.0
 
     elif command -v pacman &>/dev/null; then
-        warn "Arch Linux detected. .NET 10 may need to be installed from the AUR or manually."
-        warn "See: https://dotnet.microsoft.com/download"
-        die "Cannot auto-install .NET SDK on Arch. Please install dotnet-sdk-10 manually."
+        die "Arch Linux: install dotnet-sdk from the AUR or manually: https://dotnet.microsoft.com/download/dotnet/10.0"
 
     else
-        die "Unsupported package manager. Install .NET 10 SDK manually: https://dotnet.microsoft.com/download"
+        die "Unsupported package manager. Install .NET 10 SDK manually: https://dotnet.microsoft.com/download/dotnet/10.0"
     fi
 
-    DOTNET_CMD="$(command -v dotnet 2>/dev/null || echo /usr/share/dotnet/dotnet)"
-    if [[ ! -x "$DOTNET_CMD" ]]; then
-        DOTNET_CMD="/usr/bin/dotnet"
-    fi
-    if [[ ! -x "$DOTNET_CMD" ]]; then
+    if ! DOTNET_CMD="$(find_dotnet)"; then
         die ".NET SDK installation succeeded but dotnet binary not found. Please add it to PATH."
     fi
 
@@ -170,8 +188,7 @@ REPO
 }
 
 DOTNET_CMD=""
-if command -v dotnet &>/dev/null; then
-    DOTNET_CMD="$(command -v dotnet)"
+if DOTNET_CMD="$(find_dotnet)"; then
     DOTNET_VER="$("$DOTNET_CMD" --version 2>/dev/null || true)"
     if [[ "$DOTNET_VER" == 10.* ]]; then
         info "dotnet 10 is already installed: $DOTNET_CMD ($DOTNET_VER)"
