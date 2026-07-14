@@ -2,7 +2,7 @@ name: Build & Deploy
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, ci-* ]
 
 jobs:
   build:
@@ -36,6 +36,7 @@ jobs:
           source: "publish/*"
           target: "/var/www/ReverseLlama"
           strip_components: 1
+          tar_tmp_path: "~"
 
       - name: Restart app
         uses: appleboy/ssh-action@v1.2.0
