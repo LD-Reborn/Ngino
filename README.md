@@ -6,8 +6,10 @@ The client opens and maintains a WebSocket connection to the server. The server 
 
 <table>
 <tr>
-<td><img src="docs/README_architecture.png" width="1400" alt="client-server architecture visualized using arrows"></td>
+<td><img src="docs/images/README_architecture.png" width="1400" alt="client-server architecture visualized using arrows"></td>
 <td>
+
+
 
 The server provides
 - An API with
@@ -33,6 +35,9 @@ The client provides a persistent outbound connection to the server and forwards 
 </td>
 </tr>
 </table>
+
+[Screenshots of the app can be seen here](docs/Screenshots.md)
+
 
 ## Projects
 
