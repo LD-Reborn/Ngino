@@ -912,20 +912,26 @@ internal sealed class ManagementStore
                     {
                         if (regex.IsMatch(connectedClient))
                         {
-                            allClients.Add(connectedClient);
                             if (!string.IsNullOrWhiteSpace(model))
                             {
                                 clientModels.Add($"{connectedClient}:{model}");
+                            }
+                            else
+                            {
+                                allClients.Add(connectedClient);
                             }
                         }
                     }
                 }
                 else if (!string.IsNullOrWhiteSpace(clientId))
                 {
-                    allClients.Add(clientId);
                     if (!string.IsNullOrWhiteSpace(model))
                     {
                         clientModels.Add($"{clientId}:{model}");
+                    }
+                    else
+                    {
+                        allClients.Add(clientId);
                     }
                 }
             }

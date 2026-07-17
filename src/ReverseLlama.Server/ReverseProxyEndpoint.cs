@@ -97,7 +97,9 @@ internal static class ReverseProxyEndpoint
         var connection = hub.SelectBest(
             requestedModel,
             clientId => !managementStore.GetClientAccess(clientId).IsDisabled
-                && groupAccess.IsClientAllowed(clientId));
+                && (requestedModel is null
+                    ? groupAccess.IsClientAllowed(clientId)
+                    : groupAccess.IsClientModelAllowed(clientId, requestedModel)));
         if (connection is null)
         {
             if (!hub.HasClient)
@@ -202,6 +204,13 @@ internal static class ReverseProxyEndpoint
         }
 
         var requestedModel = embeddingRequest?.Model ?? await GetRequestedModelAsync(context.Request, clientPath);
+        if (requestedModel is not null && groupAccess is not null && !groupAccess.IsClientModelAllowed(clientId, requestedModel))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsync($"Access to model '{requestedModel}' on client '{clientId}' is not permitted.", context.RequestAborted);
+            return;
+        }
+
         await ForwardAsync(
             context,
             connection,
@@ -300,7 +309,7 @@ internal static class ReverseProxyEndpoint
         foreach (var (model, clients) in models.OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase))
         {
             var accessibleClients = clients
-                .Where(clientId => groupAccess.IsClientModelAllowed(clientId, model) || groupAccess.IsClientAllowed(clientId))
+                .Where(clientId => groupAccess.IsClientModelAllowed(clientId, model))
                 .ToList();
 
             if (accessibleClients.Count > 0)
