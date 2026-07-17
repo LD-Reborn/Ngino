@@ -43,6 +43,20 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
+        var billingCheck = managementStore.CheckBalanceForApiKey(auth.ApiKeyId);
+        if (!billingCheck.Allowed)
+        {
+            context.Response.StatusCode = StatusCodes.Status402PaymentRequired;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Insufficient balance.",
+                balance = billingCheck.Balance,
+                currency = billingCheck.Currency,
+                threshold = billingCheck.Threshold
+            }, context.RequestAborted);
+            return;
+        }
+
         var groupAccess = ResolveGroupAccess(auth.ApiKeyId, managementStore);
 
         var pathTokenRemoved = TokenAuthentication.TryRemovePathToken(context.Request.Path, settings, managementStore, out var proxyPath);
@@ -76,7 +90,8 @@ internal static class ReverseProxyEndpoint
                 loggerFactory,
                 embeddingCache,
                 managementStore,
-                groupAccess);
+                groupAccess,
+                auth.ApiKeyId);
             return;
         }
 
@@ -124,7 +139,8 @@ internal static class ReverseProxyEndpoint
             loggerFactory,
             embeddingCache,
             embeddingRequest,
-            managementStore);
+            managementStore,
+            auth.ApiKeyId);
     }
 
     public static async Task HandleClientAsync(
@@ -142,6 +158,20 @@ internal static class ReverseProxyEndpoint
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(UnauthorizedMessage, context.RequestAborted);
+            return;
+        }
+
+        var billingCheck = managementStore.CheckBalanceForApiKey(auth.ApiKeyId);
+        if (!billingCheck.Allowed)
+        {
+            context.Response.StatusCode = StatusCodes.Status402PaymentRequired;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = "Insufficient balance.",
+                balance = billingCheck.Balance,
+                currency = billingCheck.Currency,
+                threshold = billingCheck.Threshold
+            }, context.RequestAborted);
             return;
         }
 
@@ -165,7 +195,8 @@ internal static class ReverseProxyEndpoint
             loggerFactory,
             embeddingCache,
             managementStore,
-            groupAccess);
+            groupAccess,
+            auth.ApiKeyId);
     }
 
     private static async Task ForwardToClientAsync(
@@ -178,7 +209,8 @@ internal static class ReverseProxyEndpoint
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
         ManagementStore managementStore,
-        GroupAccess? groupAccess = null)
+        GroupAccess? groupAccess = null,
+        string? apiKeyId = null)
     {
         var clientAccess = managementStore.GetClientAccess(clientId);
         if (clientAccess.IsDisabled)
@@ -220,7 +252,8 @@ internal static class ReverseProxyEndpoint
             loggerFactory,
             embeddingCache,
             embeddingRequest,
-            managementStore);
+            managementStore,
+            apiKeyId);
     }
 
     private static bool IsRootPath(PathString path) =>
@@ -464,7 +497,8 @@ internal static class ReverseProxyEndpoint
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
         EmbeddingCacheRequest? embeddingRequest,
-        ManagementStore managementStore)
+        ManagementStore managementStore,
+        string? apiKeyId = null)
     {
         var logger = loggerFactory.CreateLogger("ReverseLlama.Server.ReverseProxy");
         var requestId = Guid.NewGuid().ToString("n");
@@ -549,13 +583,29 @@ internal static class ReverseProxyEndpoint
         {
             connection.RemovePending(requestId);
             var completedAt = DateTimeOffset.UtcNow;
+            var tokenCounts = tokenCounter.CountTokens();
+
+            var cost = 0.0;
+            if (!string.IsNullOrWhiteSpace(apiKeyId) && tokenCounts.TotalTokens > 0)
+            {
+                var billing = managementStore.ResolveBillingForApiKey(apiKeyId);
+                if (billing is not null)
+                {
+                    cost = managementStore.CalculateCost(billing.GroupId, requestedModel, tokenCounts.TotalTokens);
+                }
+            }
+
             managementStore.RecordRequest(new RequestMetric(
                 connection.ClientId,
                 requestedModel,
                 context.Request.Method,
                 pathAndQuery,
                 statusCode ?? (context.Response.HasStarted ? context.Response.StatusCode : null),
-                tokenCounter.CountTokens(),
+                tokenCounts.PromptTokens,
+                tokenCounts.CompletionTokens,
+                tokenCounts.TotalTokens,
+                apiKeyId,
+                cost,
                 startedAt,
                 completedAt,
                 completedAt - startedAt));

@@ -3,7 +3,8 @@ const state = {
   detail: null,
   groupDetail: null,
   newKey: null,
-  loading: false
+  loading: false,
+  usageData: null
 };
 
 const content = document.getElementById("content");
@@ -93,6 +94,28 @@ content.addEventListener("click", async (event) => {
     if (action === "toggle-key-assignment") {
       await toggleApiKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
     }
+
+    if (action === "delete-billing-rule") {
+      const ruleId = button.dataset.ruleId;
+      if (!confirm("Delete this billing rule?")) {
+        return;
+      }
+
+      await api(`/groups/${encodeURIComponent(groupId)}/billing/rules/${ruleId}`, { method: "DELETE" });
+      setNotice("Billing rule deleted.");
+      await loadGroupDetail(groupId);
+    }
+
+    if (action === "delete-payment") {
+      const paymentId = button.dataset.paymentId;
+      if (!confirm("Delete this payment record?")) {
+        return;
+      }
+
+      await api(`/groups/${encodeURIComponent(groupId)}/billing/payments/${paymentId}`, { method: "DELETE" });
+      setNotice("Payment deleted.");
+      await loadGroupDetail(groupId);
+    }
   } catch (error) {
     setNotice(error.message, true);
   } finally {
@@ -175,6 +198,49 @@ content.addEventListener("submit", async (event) => {
         body
       });
       setNotice("Client added.");
+      form.reset();
+      await loadGroupDetail(groupId);
+    }
+
+    if (form.dataset.form === "billing-config") {
+      const groupId = form.dataset.groupId;
+      await api(`/groups/${encodeURIComponent(groupId)}/billing`, {
+        method: "PUT",
+        body: {
+          currency: data.currency,
+          defaultRatePer1k: parseFloat(data.defaultRatePer1k) || 0,
+          refuseBelowBalance: parseFloat(data.refuseBelowBalance) || 0,
+          enabled: data.enabled === "on"
+        }
+      });
+      setNotice("Billing configuration saved.");
+      await loadGroupDetail(groupId);
+    }
+
+    if (form.dataset.form === "add-billing-rule") {
+      const groupId = form.dataset.groupId;
+      await api(`/groups/${encodeURIComponent(groupId)}/billing/rules`, {
+        method: "POST",
+        body: {
+          modelRegex: data.modelRegex,
+          ratePer1k: parseFloat(data.ratePer1k) || 0
+        }
+      });
+      setNotice("Billing rule added.");
+      form.reset();
+      await loadGroupDetail(groupId);
+    }
+
+    if (form.dataset.form === "add-payment") {
+      const groupId = form.dataset.groupId;
+      await api(`/groups/${encodeURIComponent(groupId)}/billing/payments`, {
+        method: "POST",
+        body: {
+          amount: parseFloat(data.amount) || 0,
+          description: data.description || null
+        }
+      });
+      setNotice("Payment recorded.");
       form.reset();
       await loadGroupDetail(groupId);
     }
@@ -275,6 +341,11 @@ async function renderRoute() {
 
   if (view === "groups") {
     renderGroups();
+    return;
+  }
+
+  if (view === "usage") {
+    await loadUsage();
     return;
   }
 
@@ -731,13 +802,17 @@ async function loadGroupDetail(groupId) {
   content.innerHTML = `<div class="panel"><div class="empty">Loading group...</div></div>`;
 
   try {
-    const [group, clients, apiKeyGroups] = await Promise.all([
+    const [group, clients, apiKeyGroups, billing, rules, payments, balance] = await Promise.all([
       api(`/groups/${encodeURIComponent(groupId)}`),
       api(`/groups/${encodeURIComponent(groupId)}/clients`),
-      api("/api-keys/groups")
+      api("/api-keys/groups"),
+      api(`/groups/${encodeURIComponent(groupId)}/billing`),
+      api(`/groups/${encodeURIComponent(groupId)}/billing/rules`),
+      api(`/groups/${encodeURIComponent(groupId)}/billing/payments`),
+      api(`/groups/${encodeURIComponent(groupId)}/billing/balance`)
     ]);
 
-    state.groupDetail = { group, clients, apiKeyGroups };
+    state.groupDetail = { group, clients, apiKeyGroups, billing, rules, payments, balance };
     renderGroupDetail();
   } catch (error) {
     content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
@@ -745,7 +820,7 @@ async function loadGroupDetail(groupId) {
 }
 
 function renderGroupDetail() {
-  const { group, clients, apiKeyGroups } = state.groupDetail;
+  const { group, clients, apiKeyGroups, billing, rules, payments, balance } = state.groupDetail;
   const allApiKeys = state.summary?.apiKeys || [];
   const assignedKeyIds = new Set(
     apiKeyGroups
@@ -812,6 +887,96 @@ function renderGroupDetail() {
       </div>
       <div class="table-wrap">
         ${allApiKeys.length ? apiKeyAssignmentTable(allApiKeys, group.id, assignedKeyIds) : emptyState("No API keys have been created.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Billing</h2>
+        ${billing.enabled ? badge("Enabled", "good") : badge("Disabled", "")}
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="billing-config" data-group-id="${escapeAttr(group.id)}">
+          <div class="field">
+            <label for="billingCurrency">Currency</label>
+            <select class="select" id="billingCurrency" name="currency">
+              ${["EUR", "USD", "GBP", "INR", "JPY", "CAD", "AUD", "CHF"].map(c => `<option value="${c}" ${billing.currency === c ? "selected" : ""}>${c}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field">
+            <label for="billingDefaultRate">Default rate / 1k tokens</label>
+            <input class="input" id="billingDefaultRate" name="defaultRatePer1k" type="number" step="0.0001" min="0" value="${billing.defaultRatePer1k || 0}">
+          </div>
+          <div class="field">
+            <label for="billingRefuseBelow">Refuse below balance</label>
+            <input class="input" id="billingRefuseBelow" name="refuseBelowBalance" type="number" step="0.01" value="${billing.refuseBelowBalance || 0}">
+          </div>
+          <div class="field billing-toggle">
+            <label for="billingEnabled">Enabled</label>
+            <input type="checkbox" id="billingEnabled" name="enabled" ${billing.enabled ? "checked" : ""}>
+          </div>
+          <button class="button" type="submit">Save</button>
+        </form>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Balance</h2>
+      </div>
+      <div class="panel-body">
+        <div class="balance-display">
+          <div class="balance-current">
+            <strong>${formatCurrency(balance.balance, balance.currency)}</strong>
+            <span>Current balance</span>
+          </div>
+          <div class="balance-detail">
+            <div>${formatCurrency(balance.totalPayments, balance.currency)} payments</div>
+            <div>${formatCurrency(balance.totalCosts, balance.currency)} costs</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Billing rules</h2>
+        <span class="badge">${rules.length} total</span>
+      </div>
+      <div class="table-wrap">
+        ${rules.length ? billingRulesTable(rules, group.id) : emptyState("No billing rules. The default rate applies to all models.")}
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="add-billing-rule" data-group-id="${escapeAttr(group.id)}">
+          <div class="field">
+            <label for="ruleModelRegex">Model regex</label>
+            <input class="input" id="ruleModelRegex" name="modelRegex" placeholder="llama.*" required>
+          </div>
+          <div class="field">
+            <label for="ruleRate">Rate / 1k tokens</label>
+            <input class="input" id="ruleRate" name="ratePer1k" type="number" step="0.0001" min="0" required>
+          </div>
+          <button class="button" type="submit">Add rule</button>
+        </form>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Payments</h2>
+        <span class="badge">${payments.length} total</span>
+      </div>
+      <div class="table-wrap">
+        ${payments.length ? paymentsTable(payments, group.id) : emptyState("No payments recorded.")}
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="add-payment" data-group-id="${escapeAttr(group.id)}">
+          <div class="field">
+            <label for="paymentAmount">Amount</label>
+            <input class="input" id="paymentAmount" name="amount" type="number" step="0.01" min="0" required>
+          </div>
+          <div class="field">
+            <label for="paymentDescription">Description</label>
+            <input class="input" id="paymentDescription" name="description" placeholder="Invoice #1234">
+          </div>
+          <button class="button" type="submit">Record payment</button>
+        </form>
       </div>
     </div>
   `;
@@ -913,6 +1078,260 @@ async function toggleApiKeyAssignment(groupId, keyId, currentlyAssigned) {
 
   setNotice(currentlyAssigned ? "API key unassigned from group." : "API key assigned to group.");
   await loadGroupDetail(groupId);
+}
+
+function billingRulesTable(rules, groupId) {
+  const rows = rules.map((rule) => `
+    <tr>
+      <td><div class="code-inline">${escapeHtml(rule.modelRegex)}</div></td>
+      <td>${rule.ratePer1k}</td>
+      <td>
+        <button class="button danger" data-action="delete-billing-rule" data-group-id="${escapeAttr(groupId)}" data-rule-id="${rule.id}">Delete</button>
+      </td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Model regex</th>
+          <th>Rate / 1k tokens</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function paymentsTable(payments, groupId) {
+  const rows = payments.map((payment) => `
+    <tr>
+      <td>${formatCurrency(payment.amount, "")}</td>
+      <td>${payment.description ? escapeHtml(payment.description) : `<span class="cell-sub">-</span>`}</td>
+      <td>${payment.createdBy ? escapeHtml(payment.createdBy) : `<span class="cell-sub">-</span>`}</td>
+      <td>${formatDate(payment.createdAtUtc)}</td>
+      <td>
+        <button class="button danger" data-action="delete-payment" data-group-id="${escapeAttr(groupId)}" data-payment-id="${payment.id}">Delete</button>
+      </td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Amount</th>
+          <th>Description</th>
+          <th>Created by</th>
+          <th>Date</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function formatCurrency(value, currency) {
+  const num = typeof value === "number" ? value : parseFloat(value) || 0;
+  const formatted = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(num);
+  if (currency && typeof currency === "string" && currency.length > 0) {
+    return `${formatted} ${currency}`;
+  }
+  return formatted;
+}
+
+async function loadUsage() {
+  pageTitle.textContent = "Usage";
+  pageSubtitle.textContent = "Token usage and revenue statistics.";
+  content.innerHTML = `<div class="panel"><div class="empty">Loading usage data...</div></div>`;
+
+  try {
+    const [usage, revenue] = await Promise.all([
+      api("/usage/tokens"),
+      api("/usage/revenue")
+    ]);
+
+    state.usageData = { usage, revenue };
+    renderUsage();
+  } catch (error) {
+    content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
+  }
+}
+
+function renderUsage() {
+  const { usage, revenue } = state.usageData;
+  const hasAnyBilling = (state.summary?.groups || []).some((g) => {
+    const billing = state.groupDetail?.billing;
+    return billing?.enabled;
+  });
+
+  const byModel = usage.byModel || [];
+  const byClient = usage.byClient || [];
+  const byApiKey = usage.byApiKey || [];
+  const byGroup = usage.byGroup || [];
+  const clientRevenue = revenue || [];
+
+  const revenueMap = {};
+  for (const r of clientRevenue) {
+    revenueMap[r.clientId] = r;
+  }
+
+  content.innerHTML = `
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Tokens by model</h2>
+        <span class="badge">${byModel.length} models</span>
+      </div>
+      <div class="table-wrap">
+        ${byModel.length ? tokenStatsModelTable(byModel) : emptyState("No token data yet.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Tokens by machine</h2>
+        <span class="badge">${byClient.length} machines</span>
+      </div>
+      <div class="table-wrap">
+        ${byClient.length ? tokenStatsClientTable(byClient, revenueMap) : emptyState("No token data yet.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Tokens by API key</h2>
+        <span class="badge">${byApiKey.length} keys</span>
+      </div>
+      <div class="table-wrap">
+        ${byApiKey.length ? tokenStatsApiKeyTable(byApiKey) : emptyState("No token data yet.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Tokens by group</h2>
+        <span class="badge">${byGroup.length} groups</span>
+      </div>
+      <div class="table-wrap">
+        ${byGroup.length ? tokenStatsGroupTable(byGroup) : emptyState("No token data yet.")}
+      </div>
+    </div>
+  `;
+}
+
+function tokenStatsModelTable(stats) {
+  const rows = stats.map((s) => `
+    <tr>
+      <td><div class="cell-main">${escapeHtml(s.model)}</div></td>
+      <td>${number(s.promptTokens)}</td>
+      <td>${number(s.completionTokens)}</td>
+      <td>${number(s.totalTokens)}</td>
+      <td>${number(s.requests)}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Prompt tokens</th>
+          <th>Completion tokens</th>
+          <th>Total tokens</th>
+          <th>Requests</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function tokenStatsClientTable(stats, revenueMap) {
+  const rows = stats.map((s) => {
+    const rev = revenueMap[s.clientId];
+    return `
+    <tr>
+      <td><div class="cell-main">${escapeHtml(s.clientId)}</div></td>
+      <td>${number(s.promptTokens)}</td>
+      <td>${number(s.completionTokens)}</td>
+      <td>${number(s.totalTokens)}</td>
+      <td>${number(s.requests)}</td>
+      ${rev ? `<td>${formatCurrency(rev.revenue, rev.currency)}</td>` : `<td><span class="cell-sub">-</span></td>`}
+    </tr>
+  `}).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Machine</th>
+          <th>Prompt tokens</th>
+          <th>Completion tokens</th>
+          <th>Total tokens</th>
+          <th>Requests</th>
+          <th>Revenue</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function tokenStatsApiKeyTable(stats) {
+  const rows = stats.map((s) => `
+    <tr>
+      <td>
+        <div class="cell-main">${escapeHtml(s.apiKeyName)}</div>
+        <div class="cell-sub">${escapeHtml(s.apiKeyPrefix)}...</div>
+      </td>
+      <td>${number(s.promptTokens)}</td>
+      <td>${number(s.completionTokens)}</td>
+      <td>${number(s.totalTokens)}</td>
+      <td>${number(s.requests)}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>API key</th>
+          <th>Prompt tokens</th>
+          <th>Completion tokens</th>
+          <th>Total tokens</th>
+          <th>Requests</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function tokenStatsGroupTable(stats) {
+  const rows = stats.map((s) => `
+    <tr>
+      <td><div class="cell-main">${escapeHtml(s.groupName)}</div></td>
+      <td>${number(s.promptTokens)}</td>
+      <td>${number(s.completionTokens)}</td>
+      <td>${number(s.totalTokens)}</td>
+      <td>${number(s.requests)}</td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Group</th>
+          <th>Prompt tokens</th>
+          <th>Completion tokens</th>
+          <th>Total tokens</th>
+          <th>Requests</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
 
 function connectedClients() {
