@@ -281,7 +281,7 @@ textarea {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  min-width: 900px;
 }
 
 th,
@@ -357,6 +357,17 @@ tr:last-child td {
   border-color: #ead09a;
   background: #fff8e5;
   color: var(--amber);
+}
+
+.badge[href] {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.badge[href]:hover {
+  border-color: var(--blue);
+  background: #edf4ff;
+  color: var(--blue);
 }
 
 .metric-grid {

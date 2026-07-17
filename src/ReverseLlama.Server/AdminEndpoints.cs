@@ -335,7 +335,9 @@ internal static class AdminEndpoints
             models = BuildModelSummaries(hub, store),
             apiKeys = store.ListApiKeys(),
             groups = store.ListGroups(),
-            apiKeyGroups = store.ListApiKeyGroups()
+            apiKeyGroups = store.ListApiKeyGroups(),
+            clientGroups = store.ResolveClientGroups(
+                hub.ClientSnapshots.Select(c => c.Id).ToList())
         };
 
     private static IReadOnlyList<ClientSummary> BuildClientSummaries(TunnelHub hub, ManagementStore store)

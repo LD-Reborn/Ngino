@@ -315,7 +315,10 @@ function renderClients() {
 }
 
 function clientsTable(clients) {
-  const rows = clients.map((client) => `
+  const clientGroups = state.summary?.clientGroups || {};
+  const rows = clients.map((client) => {
+    const groups = clientGroups[client.id] || [];
+    return `
     <tr>
       <td>
         <div class="cell-main">${escapeHtml(client.id)}</div>
@@ -336,6 +339,11 @@ function clientsTable(clients) {
       <td>${modelBadges(client.models)}</td>
       <td>${modelBadges(client.activeModels)}</td>
       <td>
+        <div class="badge-row">
+          ${groups.length ? groups.map((g) => `<a class="badge" href="#groups/${encodeURIComponent(g)}">${escapeHtml(g)}</a>`).join("") : `<span class="cell-sub">None</span>`}
+        </div>
+      </td>
+      <td>
         <div class="actions">
           <button class="button warning" data-action="disable-hour" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "disabled" : ""}>Disable 1h</button>
           <button class="button warning" data-action="disable-manual" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "disabled" : ""}>Disable</button>
@@ -343,7 +351,7 @@ function clientsTable(clients) {
         </div>
       </td>
     </tr>
-  `).join("");
+  `}).join("");
 
   return `
     <table>
@@ -355,6 +363,7 @@ function clientsTable(clients) {
           <th>Requests</th>
           <th>Listed models</th>
           <th>Active models</th>
+          <th>Groups</th>
           <th>Actions</th>
         </tr>
       </thead>

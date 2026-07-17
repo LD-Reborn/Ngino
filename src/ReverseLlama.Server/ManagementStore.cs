@@ -934,6 +934,73 @@ internal sealed class ManagementStore
         }
     }
 
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ResolveClientGroups(IReadOnlyList<string> clientIds)
+    {
+        if (!_isAvailable || clientIds.Count == 0)
+        {
+            return new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var result = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var clientId in clientIds)
+        {
+            result[clientId] = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT g.name, gm.client_id, gm.client_pattern
+                FROM group_members gm
+                INNER JOIN groups g ON gm.group_id = g.id
+                """;
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var groupName = reader.GetString(0);
+                var explicitClientId = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var pattern = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                if (!string.IsNullOrWhiteSpace(explicitClientId)
+                    && result.TryGetValue(explicitClientId, out var explicitGroups))
+                {
+                    explicitGroups.Add(groupName);
+                }
+                else if (!string.IsNullOrWhiteSpace(pattern))
+                {
+                    Regex? regex = null;
+                    try
+                    {
+                        regex = new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    }
+                    catch (RegexParseException)
+                    {
+                        continue;
+                    }
+
+                    foreach (var clientId in clientIds)
+                    {
+                        if (regex.IsMatch(clientId) && result.TryGetValue(clientId, out var groups))
+                        {
+                            groups.Add(groupName);
+                        }
+                    }
+                }
+            }
+        }
+
+        var frozen = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (clientId, groups) in result)
+        {
+            frozen[clientId] = groups.ToList();
+        }
+
+        return frozen;
+    }
+
     private IReadOnlyList<string> GetApiKeyGroupIdsLocked(string apiKeyId)
     {
         using var connection = OpenConnection();
