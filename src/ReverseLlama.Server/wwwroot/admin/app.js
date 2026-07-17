@@ -361,7 +361,7 @@ function clientsTable(clients) {
           <th>Status</th>
           <th>Pending</th>
           <th>Requests</th>
-          <th>Listed models</th>
+          <th class="col-models">Listed models</th>
           <th>Active models</th>
           <th>Groups</th>
           <th>Actions</th>

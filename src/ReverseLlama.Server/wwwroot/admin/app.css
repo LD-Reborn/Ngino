@@ -294,7 +294,7 @@ td {
 }
 
 .col-models {
-  max-width: 40%;
+  width: 40%;
   overflow-wrap: anywhere;
 }
 
