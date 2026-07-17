@@ -281,7 +281,8 @@ textarea {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  table-layout: fixed;
+  min-width: 900px;
 }
 
 th,
@@ -290,6 +291,11 @@ td {
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
+}
+
+.col-models {
+  width: 40%;
+  overflow-wrap: anywhere;
 }
 
 th {
@@ -338,7 +344,7 @@ tr:last-child td {
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .badge.good {
@@ -357,6 +363,17 @@ tr:last-child td {
   border-color: #ead09a;
   background: #fff8e5;
   color: var(--amber);
+}
+
+.badge[href] {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.badge[href]:hover {
+  border-color: var(--blue);
+  background: #edf4ff;
+  color: var(--blue);
 }
 
 .metric-grid {
@@ -440,6 +457,28 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.group-link {
+  color: var(--blue);
+  text-decoration: none;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.group-link:hover {
+  text-decoration: underline;
+}
+
+.code-inline {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -455,7 +494,7 @@ tr:last-child td {
   }
 
   .nav {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .nav a {
