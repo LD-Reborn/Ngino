@@ -1,6 +1,7 @@
 const state = {
   summary: null,
   detail: null,
+  groupDetail: null,
   newKey: null,
   loading: false
 };
@@ -20,7 +21,7 @@ content.addEventListener("click", async (event) => {
     return;
   }
 
-  const { action, clientId, model, keyId } = button.dataset;
+  const { action, clientId, model, keyId, groupId, memberId } = button.dataset;
 
   try {
     setBusy(button, true);
@@ -67,6 +68,31 @@ content.addEventListener("click", async (event) => {
       await navigator.clipboard.writeText(button.dataset.key);
       setNotice("API key copied.");
     }
+
+    if (action === "delete-group") {
+      if (!confirm("Delete this group and all its members and key assignments?")) {
+        return;
+      }
+
+      await api(`/groups/${encodeURIComponent(groupId)}`, { method: "DELETE" });
+      setNotice("Group deleted.");
+      window.location.hash = "#groups";
+      await refresh();
+    }
+
+    if (action === "remove-member") {
+      if (!confirm("Remove this member from the group?")) {
+        return;
+      }
+
+      await api(`/groups/${encodeURIComponent(groupId)}/members/${memberId}`, { method: "DELETE" });
+      setNotice("Member removed.");
+      await loadGroupDetail(groupId);
+    }
+
+    if (action === "toggle-key-assignment") {
+      await toggleApiKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
+    }
   } catch (error) {
     setNotice(error.message, true);
   } finally {
@@ -103,6 +129,54 @@ content.addEventListener("submit", async (event) => {
       });
       setNotice("API key created.");
       await refresh();
+    }
+
+    if (form.dataset.form === "create-group") {
+      const result = await api("/groups", {
+        method: "POST",
+        body: { name: data.name }
+      });
+      setNotice("Group created.");
+      form.reset();
+      await refresh();
+      window.location.hash = `#groups/${encodeURIComponent(result.id)}`;
+    }
+
+    if (form.dataset.form === "edit-group-name") {
+      const groupId = form.dataset.groupId;
+      await api(`/groups/${encodeURIComponent(groupId)}`, {
+        method: "PUT",
+        body: { name: data.name }
+      });
+      setNotice("Group name updated.");
+      await refresh();
+      await loadGroupDetail(groupId);
+    }
+
+    if (form.dataset.form === "add-member") {
+      const groupId = form.dataset.groupId;
+      const body = {};
+      if (data.clientId && data.clientId.trim()) {
+        body.clientId = data.clientId.trim();
+      }
+      if (data.model && data.model.trim()) {
+        body.model = data.model.trim();
+      }
+      if (data.clientPattern && data.clientPattern.trim()) {
+        body.clientPattern = data.clientPattern.trim();
+      }
+
+      if (!body.clientId && !body.clientPattern) {
+        throw new Error("Either Client ID or Client pattern is required.");
+      }
+
+      await api(`/groups/${encodeURIComponent(groupId)}/members`, {
+        method: "POST",
+        body
+      });
+      setNotice("Member added.");
+      form.reset();
+      await loadGroupDetail(groupId);
     }
   } catch (error) {
     setNotice(error.message, true);
@@ -166,19 +240,28 @@ async function api(path, options = {}) {
 
 async function renderRoute() {
   const hash = (window.location.hash || "#clients").slice(1);
-  const [view, encodedModel] = hash.split("/");
+  const parts = hash.split("/");
+  const view = parts[0];
+  const encodedParam = parts[1];
 
   document.querySelectorAll("[data-nav]").forEach((link) => {
     link.classList.toggle("active", link.dataset.nav === view);
   });
 
-  if (view === "models" && encodedModel) {
-    const model = decodeURIComponent(encodedModel);
+  if (view === "models" && encodedParam) {
+    const model = decodeURIComponent(encodedParam);
     await loadModelDetail(model);
     return;
   }
 
+  if (view === "groups" && encodedParam) {
+    const groupId = decodeURIComponent(encodedParam);
+    await loadGroupDetail(groupId);
+    return;
+  }
+
   state.detail = null;
+  state.groupDetail = null;
 
   if (view === "models") {
     renderModels();
@@ -187,6 +270,11 @@ async function renderRoute() {
 
   if (view === "api-keys") {
     renderApiKeys();
+    return;
+  }
+
+  if (view === "groups") {
+    renderGroups();
     return;
   }
 
@@ -203,6 +291,7 @@ function updateShell() {
     <div>${escapeHtml(summary.user?.name || "Signed in")}</div>
     <div>${summary.clients.length} clients</div>
     <div>${summary.models.length} models</div>
+    <div>${(summary.groups || []).length} groups</div>
     <div>${formatDate(summary.generatedAtUtc)}</div>
   `;
 }
@@ -563,6 +652,258 @@ function apiKeysTable(keys) {
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+function renderGroups() {
+  const groups = state.summary?.groups || [];
+  pageTitle.textContent = "Groups";
+  pageSubtitle.textContent = "Manage access groups that control which clients and models API keys can reach.";
+
+  content.innerHTML = `
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Create group</h2>
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="create-group">
+          <div class="field">
+            <label for="groupName">Name</label>
+            <input class="input" id="groupName" name="name" placeholder="e.g. embeddings" required>
+          </div>
+          <button class="button" type="submit">Create</button>
+        </form>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Groups</h2>
+        <span class="badge">${groups.length} total</span>
+      </div>
+      <div class="table-wrap">
+        ${groups.length ? groupsTable(groups) : emptyState("No groups have been created.")}
+      </div>
+    </div>
+  `;
+}
+
+function groupsTable(groups) {
+  const rows = groups.map((group) => `
+    <tr>
+      <td>
+        <a class="cell-main group-link" href="#groups/${encodeURIComponent(group.id)}">${escapeHtml(group.name)}</a>
+      </td>
+      <td>${formatDate(group.createdAtUtc)}</td>
+      <td>
+        <div class="actions">
+          <a class="button secondary" href="#groups/${encodeURIComponent(group.id)}">Edit</a>
+          <button class="button danger" data-action="delete-group" data-group-id="${escapeAttr(group.id)}">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function loadGroupDetail(groupId) {
+  pageTitle.textContent = "Group Detail";
+  pageSubtitle.textContent = groupId;
+  content.innerHTML = `<div class="panel"><div class="empty">Loading group...</div></div>`;
+
+  try {
+    const [group, members, apiKeyGroups] = await Promise.all([
+      api(`/groups/${encodeURIComponent(groupId)}`),
+      api(`/groups/${encodeURIComponent(groupId)}/members`),
+      api("/api-keys/groups")
+    ]);
+
+    state.groupDetail = { group, members, apiKeyGroups };
+    renderGroupDetail();
+  } catch (error) {
+    content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
+  }
+}
+
+function renderGroupDetail() {
+  const { group, members, apiKeyGroups } = state.groupDetail;
+  const allApiKeys = state.summary?.apiKeys || [];
+  const assignedKeyIds = new Set(
+    apiKeyGroups
+      .filter((akg) => akg.apiKeyId && (akg.groupIds || []).includes(group.id))
+      .map((akg) => akg.apiKeyId)
+  );
+
+  pageTitle.textContent = "Group Detail";
+  pageSubtitle.textContent = group.name;
+
+  content.innerHTML = `
+    <div class="toolbar">
+      <a class="button secondary" href="#groups">Back to groups</a>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Group name</h2>
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="edit-group-name" data-group-id="${escapeAttr(group.id)}">
+          <div class="field">
+            <label for="editGroupName">Name</label>
+            <input class="input" id="editGroupName" name="name" value="${escapeAttr(group.name)}" required>
+          </div>
+          <button class="button" type="submit">Save</button>
+        </form>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Add member</h2>
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="add-member" data-group-id="${escapeAttr(group.id)}">
+          <div class="field">
+            <label for="addMemberClient">Client ID</label>
+            <input class="input" id="addMemberClient" name="clientId" placeholder="Client_1">
+          </div>
+          <div class="field">
+            <label for="addMemberModel">Model (optional)</label>
+            <input class="input" id="addMemberModel" name="model" placeholder="bge-m3">
+          </div>
+          <div class="field">
+            <label for="addMemberPattern">Client pattern (regex, optional)</label>
+            <input class="input" id="addMemberPattern" name="clientPattern" placeholder="GPU_[0-9]*">
+          </div>
+          <button class="button" type="submit">Add</button>
+        </form>
+        <div class="cell-sub" style="margin-top:8px">Provide either a Client ID (for explicit client access) or a Client pattern (for regex-based matching). Model is optional to restrict to a specific model.</div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Members</h2>
+        <span class="badge">${members.length} total</span>
+      </div>
+      <div class="table-wrap">
+        ${members.length ? groupMembersTable(members, group.id) : emptyState("No members in this group.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>API key assignments</h2>
+      </div>
+      <div class="table-wrap">
+        ${allApiKeys.length ? apiKeyAssignmentTable(allApiKeys, group.id, assignedKeyIds) : emptyState("No API keys have been created.")}
+      </div>
+    </div>
+  `;
+}
+
+function groupMembersTable(members, groupId) {
+  const rows = members.map((member) => `
+    <tr>
+      <td>
+        ${member.clientId
+          ? `<div class="cell-main">${escapeHtml(member.clientId)}</div>`
+          : `<div class="cell-sub">-</div>`
+        }
+      </td>
+      <td>
+        ${member.model
+          ? `<div class="cell-main">${escapeHtml(member.model)}</div>`
+          : `<div class="cell-sub">All models</div>`
+        }
+      </td>
+      <td>
+        ${member.clientPattern
+          ? `<div class="cell-main code-inline">${escapeHtml(member.clientPattern)}</div>`
+          : `<div class="cell-sub">-</div>`
+        }
+      </td>
+      <td>
+        <button class="button danger" data-action="remove-member" data-group-id="${escapeAttr(groupId)}" data-member-id="${member.id}">Remove</button>
+      </td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Client ID</th>
+          <th>Model</th>
+          <th>Client pattern</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function apiKeyAssignmentTable(apiKeys, groupId, assignedKeyIds) {
+  const rows = apiKeys.map((key) => {
+    const isAssigned = assignedKeyIds.has(key.id);
+    return `
+      <tr>
+        <td>
+          <div class="cell-main">${escapeHtml(key.name)}</div>
+          <div class="cell-sub">${escapeHtml(key.keyPrefix)}...</div>
+        </td>
+        <td>
+          <button class="button ${isAssigned ? "danger" : "secondary"}"
+            data-action="toggle-key-assignment"
+            data-group-id="${escapeAttr(groupId)}"
+            data-key-id="${escapeAttr(key.id)}"
+            data-assigned="${isAssigned}">${isAssigned ? "Remove" : "Assign"}</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>API Key</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function toggleApiKeyAssignment(groupId, keyId, currentlyAssigned) {
+  const apiKeyGroups = state.groupDetail?.apiKeyGroups || [];
+  const allApiKeys = state.summary?.apiKeys || [];
+
+  const keyGroups = apiKeyGroups.find((akg) => akg.apiKeyId === keyId);
+  const currentGroupIds = keyGroups ? [...keyGroups.groupIds] : [];
+
+  let newGroupIds;
+  if (currentlyAssigned) {
+    newGroupIds = currentGroupIds.filter((id) => id !== groupId);
+  } else {
+    newGroupIds = [...currentGroupIds, groupId];
+  }
+
+  await api(`/api-keys/${encodeURIComponent(keyId)}/groups`, {
+    method: "PUT",
+    body: { groupIds: newGroupIds }
+  });
+
+  setNotice(currentlyAssigned ? "API key unassigned from group." : "API key assigned to group.");
+  await loadGroupDetail(groupId);
 }
 
 function connectedClients() {

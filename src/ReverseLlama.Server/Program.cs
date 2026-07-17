@@ -74,6 +74,10 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
+var managementStore = app.Services.GetRequiredService<ManagementStore>();
+var tunnelHub = app.Services.GetRequiredService<TunnelHub>();
+managementStore.SetConnectedClientProvider(() => tunnelHub.ClientSnapshots.Select(c => c.Id));
+
 if (settings.Keycloak.IsConfigured)
 {
     app.UseAuthentication();

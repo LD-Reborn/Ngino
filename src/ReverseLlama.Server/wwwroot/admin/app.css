@@ -440,6 +440,28 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.group-link {
+  color: var(--blue);
+  text-decoration: none;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.group-link:hover {
+  text-decoration: underline;
+}
+
+.code-inline {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  background: var(--panel-alt);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  display: inline-block;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -455,7 +477,7 @@ tr:last-child td {
   }
 
   .nav {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 
   .nav a {

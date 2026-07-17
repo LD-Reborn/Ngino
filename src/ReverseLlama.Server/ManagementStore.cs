@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
 namespace ReverseLlama.Server;
@@ -497,6 +498,466 @@ internal sealed class ManagementStore
         return result;
     }
 
+    public string? GetApiKeyId(string apiKey)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKey))
+        {
+            return null;
+        }
+
+        var hash = HashApiKey(apiKey);
+
+        lock (_lock)
+        {
+            return _apiKeysByHash.TryGetValue(hash, out var key) ? key.Id : null;
+        }
+    }
+
+    public IReadOnlyList<GroupInfo> ListGroups()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT id, name, created_at_utc, updated_at_utc FROM groups ORDER BY name";
+
+            var result = new List<GroupInfo>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new GroupInfo(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    ReadDateTimeOffset(reader.GetString(2)),
+                    ReadDateTimeOffset(reader.GetString(3))));
+            }
+
+            return result;
+        }
+    }
+
+    public GroupInfo? GetGroup(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT id, name, created_at_utc, updated_at_utc FROM groups WHERE id = $id";
+            command.Parameters.AddWithValue("$id", groupId);
+
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new GroupInfo(
+                reader.GetString(0),
+                reader.GetString(1),
+                ReadDateTimeOffset(reader.GetString(2)),
+                ReadDateTimeOffset(reader.GetString(3)));
+        }
+    }
+
+    public GroupInfo CreateGroup(string? name)
+    {
+        EnsureAvailable();
+
+        var now = DateTimeOffset.UtcNow;
+        var id = Guid.NewGuid().ToString("n");
+        var groupName = string.IsNullOrWhiteSpace(name) ? "Group" : name.Trim();
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO groups (id, name, created_at_utc, updated_at_utc)
+                VALUES ($id, $name, $created_at_utc, $updated_at_utc)
+                """;
+            command.Parameters.AddWithValue("$id", id);
+            command.Parameters.AddWithValue("$name", groupName);
+            command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
+            command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
+            command.ExecuteNonQuery();
+        }
+
+        return new GroupInfo(id, groupName, now, now);
+    }
+
+    public bool UpdateGroup(string groupId, string name)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId) || string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE groups SET name = $name, updated_at_utc = $updated_at_utc
+                WHERE id = $id
+                """;
+            command.Parameters.AddWithValue("$id", groupId);
+            command.Parameters.AddWithValue("$name", name.Trim());
+            command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public bool DeleteGroup(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM groups WHERE id = $id";
+            command.Parameters.AddWithValue("$id", groupId);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public IReadOnlyList<GroupMemberInfo> ListGroupMembers(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, group_id, client_id, model, client_pattern
+                FROM group_members
+                WHERE group_id = $group_id
+                ORDER BY client_id, model, client_pattern
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+
+            var result = new List<GroupMemberInfo>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new GroupMemberInfo(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+            }
+
+            return result;
+        }
+    }
+
+    public GroupMemberInfo AddGroupMember(string groupId, string? clientId, string? model, string? clientPattern)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(groupId))
+        {
+            throw new ArgumentException("Group id is required.", nameof(groupId));
+        }
+
+        if (string.IsNullOrWhiteSpace(clientId) && string.IsNullOrWhiteSpace(clientPattern))
+        {
+            throw new ArgumentException("Either client_id or client_pattern is required.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(clientPattern))
+        {
+            try
+            {
+                _ = Regex.IsMatch("", clientPattern);
+            }
+            catch (RegexParseException ex)
+            {
+                throw new ArgumentException($"Unable to add client - invalid regex: {ex.Message}", nameof(clientPattern));
+            }
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO group_members (group_id, client_id, model, client_pattern)
+                VALUES ($group_id, $client_id, $model, $client_pattern)
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+            command.Parameters.AddWithValue("$client_id", string.IsNullOrWhiteSpace(clientId) ? DBNull.Value : clientId);
+            command.Parameters.AddWithValue("$model", string.IsNullOrWhiteSpace(model) ? DBNull.Value : model);
+            command.Parameters.AddWithValue("$client_pattern", string.IsNullOrWhiteSpace(clientPattern) ? DBNull.Value : clientPattern);
+            command.ExecuteNonQuery();
+
+            using var idCommand = connection.CreateCommand();
+            idCommand.CommandText = "SELECT last_insert_rowid()";
+            var insertedId = (long)idCommand.ExecuteScalar()!;
+            return new GroupMemberInfo(insertedId, groupId, clientId, model, clientPattern);
+        }
+    }
+
+    public bool RemoveGroupMember(long memberId)
+    {
+        if (!_isAvailable)
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM group_members WHERE id = $id";
+            command.Parameters.AddWithValue("$id", memberId);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public IReadOnlyList<string> GetApiKeyGroupIds(string apiKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT g.id FROM groups g
+                INNER JOIN api_key_groups akg ON g.id = akg.group_id
+                WHERE akg.api_key_id = $api_key_id
+                ORDER BY g.name
+                """;
+            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+
+            var result = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+    }
+
+    public void SetApiKeyGroups(string apiKeyId, IReadOnlyList<string> groupIds)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            throw new ArgumentException("API key id is required.", nameof(apiKeyId));
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                using (var deleteCommand = connection.CreateCommand())
+                {
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandText = "DELETE FROM api_key_groups WHERE api_key_id = $api_key_id";
+                    deleteCommand.Parameters.AddWithValue("$api_key_id", apiKeyId);
+                    deleteCommand.ExecuteNonQuery();
+                }
+
+                using (var insertCommand = connection.CreateCommand())
+                {
+                    insertCommand.Transaction = transaction;
+                    insertCommand.CommandText = """
+                        INSERT INTO api_key_groups (api_key_id, group_id)
+                        VALUES ($api_key_id, $group_id)
+                        """;
+
+                    var apiKeyParam = insertCommand.Parameters.Add("$api_key_id", SqliteType.Text);
+                    var groupParam = insertCommand.Parameters.Add("$group_id", SqliteType.Text);
+                    apiKeyParam.Value = apiKeyId;
+
+                    foreach (var groupId in groupIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        groupParam.Value = groupId;
+                        insertCommand.ExecuteNonQuery();
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+    }
+
+    public IReadOnlyList<ApiKeyGroupInfo> ListApiKeyGroups()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT ak.id, ak.name, ak.key_prefix,
+                    GROUP_CONCAT(g.id) as group_ids,
+                    GROUP_CONCAT(g.name) as group_names
+                FROM api_keys ak
+                LEFT JOIN api_key_groups akg ON ak.id = akg.api_key_id
+                LEFT JOIN groups g ON akg.group_id = g.id
+                GROUP BY ak.id
+                ORDER BY ak.name
+                """;
+
+            var result = new List<ApiKeyGroupInfo>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var keyId = reader.GetString(0);
+                var keyName = reader.GetString(1);
+                var keyPrefix = reader.GetString(2);
+                var groupIds = reader.IsDBNull(3)
+                    ? []
+                    : reader.GetString(3).Split(',', StringSplitOptions.RemoveEmptyEntries);
+                var groupNames = reader.IsDBNull(4)
+                    ? []
+                    : reader.GetString(4).Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+                result.Add(new ApiKeyGroupInfo(keyId, keyName, keyPrefix, groupIds, groupNames));
+            }
+
+            return result;
+        }
+    }
+
+    public GroupAccess ResolveGroupAccess(string? apiKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return GroupAccess.Unrestricted;
+        }
+
+        lock (_lock)
+        {
+            var groupIds = GetApiKeyGroupIdsLocked(apiKeyId);
+            if (groupIds.Count == 0)
+            {
+                return GroupAccess.Unrestricted;
+            }
+
+            var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var allClients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT gm.client_id, gm.model, gm.client_pattern
+                FROM group_members gm
+                INNER JOIN api_key_groups akg ON gm.group_id = akg.group_id
+                WHERE akg.api_key_id = $api_key_id
+                """;
+            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var clientId = reader.IsDBNull(0) ? null : reader.GetString(0);
+                var model = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var pattern = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                if (!string.IsNullOrWhiteSpace(pattern))
+                {
+                    Regex? regex = null;
+                    try
+                    {
+                        regex = new Regex(
+                            pattern,
+                            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                    }
+                    catch (RegexParseException)
+                    {
+                        continue;
+                    }
+
+                    foreach (var connectedClient in _getConnectedClientIds())
+                    {
+                        if (regex.IsMatch(connectedClient))
+                        {
+                            allClients.Add(connectedClient);
+                            if (!string.IsNullOrWhiteSpace(model))
+                            {
+                                clientModels.Add($"{connectedClient}:{model}");
+                            }
+                        }
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(clientId))
+                {
+                    allClients.Add(clientId);
+                    if (!string.IsNullOrWhiteSpace(model))
+                    {
+                        clientModels.Add($"{clientId}:{model}");
+                    }
+                }
+            }
+
+            return new GroupAccess(clientModels, allClients);
+        }
+    }
+
+    private IReadOnlyList<string> GetApiKeyGroupIdsLocked(string apiKeyId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT group_id FROM api_key_groups WHERE api_key_id = $api_key_id";
+        command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
+
+    private Func<IEnumerable<string>> _getConnectedClientIds = () => [];
+
+    public void SetConnectedClientProvider(Func<IEnumerable<string>> provider)
+    {
+        _getConnectedClientIds = provider;
+    }
+
     private void Initialize()
     {
         var directory = Path.GetDirectoryName(_databasePath);
@@ -551,6 +1012,30 @@ internal sealed class ManagementStore
 
                 CREATE INDEX IF NOT EXISTS idx_request_metrics_model_started
                     ON request_metrics (model, started_at_utc);
+
+                CREATE TABLE IF NOT EXISTS groups (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS group_members (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    client_id TEXT NULL,
+                    model TEXT NULL,
+                    client_pattern TEXT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_group_members_group_id
+                    ON group_members (group_id);
+
+                CREATE TABLE IF NOT EXISTS api_key_groups (
+                    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+                    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    PRIMARY KEY (api_key_id, group_id)
+                );
                 """;
             command.ExecuteNonQuery();
         }
@@ -698,3 +1183,49 @@ internal sealed record ModelUsageStats(
     long RequestsLastHour,
     long TokensLast10Minutes,
     long TokensLastHour);
+
+internal sealed record GroupInfo(
+    string Id,
+    string Name,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+internal sealed record GroupMemberInfo(
+    long Id,
+    string GroupId,
+    string? ClientId,
+    string? Model,
+    string? ClientPattern);
+
+internal sealed record ApiKeyGroupInfo(
+    string ApiKeyId,
+    string ApiKeyName,
+    string ApiKeyPrefix,
+    IReadOnlyList<string> GroupIds,
+    IReadOnlyList<string> GroupNames);
+
+internal sealed class GroupAccess
+{
+    public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
+
+    public IReadOnlySet<string> ClientModels { get; }
+
+    public IReadOnlySet<string> AllClients { get; }
+
+    public bool IsUnrestricted { get; }
+
+    public GroupAccess(IReadOnlySet<string> clientModels, IReadOnlySet<string> allClients, bool isUnrestricted = false)
+    {
+        ClientModels = clientModels;
+        AllClients = allClients;
+        IsUnrestricted = isUnrestricted;
+    }
+
+    public bool IsClientAllowed(string clientId) =>
+        IsUnrestricted || AllClients.Contains(clientId);
+
+    public bool IsClientModelAllowed(string clientId, string model) =>
+        IsUnrestricted
+        || AllClients.Contains(clientId)
+        || ClientModels.Contains($"{clientId}:{model}");
+}

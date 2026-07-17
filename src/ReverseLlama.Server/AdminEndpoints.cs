@@ -73,7 +73,7 @@ internal static class AdminEndpoints
             }
             catch (Exception exception)
             {
-                return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = exception.Message });
             }
         });
 
@@ -86,7 +86,7 @@ internal static class AdminEndpoints
             }
             catch (Exception exception)
             {
-                return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = exception.Message });
             }
         });
 
@@ -176,7 +176,7 @@ internal static class AdminEndpoints
             }
             catch (Exception exception)
             {
-                return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+                return Results.BadRequest(new { error = exception.Message });
             }
         });
 
@@ -184,6 +184,115 @@ internal static class AdminEndpoints
             store.DeleteApiKey(id)
                 ? Results.NoContent()
                 : Results.NotFound(new { error = $"API key '{id}' was not found." }));
+
+        api.MapGet("/groups", (ManagementStore store) =>
+            Results.Json(store.ListGroups()));
+
+        api.MapPost("/groups", (CreateGroupRequest request, ManagementStore store) =>
+        {
+            try
+            {
+                return Results.Json(store.CreateGroup(request.Name));
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapGet("/groups/{id}", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            return group is not null
+                ? Results.Json(group)
+                : Results.NotFound(new { error = $"Group '{id}' was not found." });
+        });
+
+        api.MapPut("/groups/{id}", (string id, UpdateGroupRequest request, ManagementStore store) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                return Results.BadRequest(new { error = "Name is required." });
+            }
+
+            return store.UpdateGroup(id, request.Name)
+                ? Results.Ok(store.GetGroup(id))
+                : Results.NotFound(new { error = $"Group '{id}' was not found." });
+        });
+
+        api.MapDelete("/groups/{id}", (string id, ManagementStore store) =>
+            store.DeleteGroup(id)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = $"Group '{id}' was not found." }));
+
+        api.MapGet("/groups/{id}/members", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            return Results.Json(store.ListGroupMembers(id));
+        });
+
+        api.MapPost("/groups/{id}/members", (string id, AddGroupMemberRequest request, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            try
+            {
+                var member = store.AddGroupMember(id, request.ClientId, request.Model, request.ClientPattern);
+                return Results.Json(member);
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = $"Failed to add member: {exception.Message}" });
+            }
+        });
+
+        api.MapDelete("/groups/{groupId}/members/{memberId:long}", (string groupId, long memberId, ManagementStore store) =>
+        {
+            var group = store.GetGroup(groupId);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{groupId}' was not found." });
+            }
+
+            return store.RemoveGroupMember(memberId)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = $"Member '{memberId}' was not found." });
+        });
+
+        api.MapGet("/api-keys/groups", (ManagementStore store) =>
+            Results.Json(store.ListApiKeyGroups()));
+
+        api.MapPut("/api-keys/{id}/groups", (string id, SetApiKeyGroupsRequest request, ManagementStore store) =>
+        {
+            var keys = store.ListApiKeys();
+            if (!keys.Any(k => k.Id == id))
+            {
+                return Results.NotFound(new { error = $"API key '{id}' was not found." });
+            }
+
+            try
+            {
+                store.SetApiKeyGroups(id, request.GroupIds ?? []);
+                return Results.Ok(new { apiKeyId = id, groupIds = store.GetApiKeyGroupIds(id) });
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
 
         var adminHome = app.MapGet("/admin", (IWebHostEnvironment environment) =>
             ServeAdminAsset(environment, null));
@@ -224,7 +333,9 @@ internal static class AdminEndpoints
             },
             clients = BuildClientSummaries(hub, store),
             models = BuildModelSummaries(hub, store),
-            apiKeys = store.ListApiKeys()
+            apiKeys = store.ListApiKeys(),
+            groups = store.ListGroups(),
+            apiKeyGroups = store.ListApiKeyGroups()
         };
 
     private static IReadOnlyList<ClientSummary> BuildClientSummaries(TunnelHub hub, ManagementStore store)
@@ -469,6 +580,17 @@ internal sealed record ModelActionRequest(
     string Action);
 
 internal sealed record CreateApiKeyRequest(string? Name);
+
+internal sealed record CreateGroupRequest(string? Name);
+
+internal sealed record UpdateGroupRequest(string Name);
+
+internal sealed record AddGroupMemberRequest(
+    string? ClientId,
+    string? Model,
+    string? ClientPattern);
+
+internal sealed record SetApiKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
 
 internal sealed record ClientSummary(
     string Id,
