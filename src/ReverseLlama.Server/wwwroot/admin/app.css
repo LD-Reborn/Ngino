@@ -338,7 +338,7 @@ tr:last-child td {
   color: var(--text);
   font-size: 12px;
   font-weight: 700;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 
 .badge.good {
