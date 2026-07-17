@@ -21,15 +21,16 @@ internal sealed class ResponseTokenCounter
         _buffer.Write(chunk[..length]);
     }
 
-    public int CountTokens()
+    public TokenCounts CountTokens()
     {
         if (_buffer.Length == 0)
         {
-            return 0;
+            return new TokenCounts(0, 0, 0);
         }
 
         var payload = Encoding.UTF8.GetString(_buffer.ToArray());
-        var total = 0;
+        var totalPrompt = 0;
+        var totalCompletion = 0;
         var parsedLines = false;
 
         foreach (var rawLine in payload.Split('\n'))
@@ -50,30 +51,37 @@ internal sealed class ResponseTokenCounter
                 continue;
             }
 
-            if (TryExtractFromJson(line, out var lineTokens))
+            if (TryExtractTokenCountsFromJson(line, out var prompt, out var completion))
             {
                 parsedLines = true;
-                total += lineTokens;
+                totalPrompt += prompt;
+                totalCompletion += completion;
             }
         }
 
         if (parsedLines)
         {
-            return total;
+            return new TokenCounts(totalPrompt, totalCompletion, totalPrompt + totalCompletion);
         }
 
-        return TryExtractFromJson(payload, out var tokens) ? tokens : 0;
+        if (TryExtractTokenCountsFromJson(payload, out var promptFallback, out var completionFallback))
+        {
+            return new TokenCounts(promptFallback, completionFallback, promptFallback + completionFallback);
+        }
+
+        return new TokenCounts(0, 0, 0);
     }
 
-    private static bool TryExtractFromJson(string json, out int tokens)
+    private static bool TryExtractTokenCountsFromJson(string json, out int promptTokens, out int completionTokens)
     {
-        tokens = 0;
+        promptTokens = 0;
+        completionTokens = 0;
 
         try
         {
             using var document = JsonDocument.Parse(json);
-            tokens = ExtractTokens(document.RootElement);
-            return tokens > 0;
+            ExtractTokenCounts(document.RootElement, out promptTokens, out completionTokens);
+            return promptTokens > 0 || completionTokens > 0;
         }
         catch (JsonException)
         {
@@ -81,70 +89,68 @@ internal sealed class ResponseTokenCounter
         }
     }
 
-    private static int ExtractTokens(JsonElement element)
+    private static void ExtractTokenCounts(JsonElement element, out int promptTokens, out int completionTokens)
     {
+        promptTokens = 0;
+        completionTokens = 0;
+
         if (element.ValueKind == JsonValueKind.Array)
         {
-            var total = 0;
             foreach (var item in element.EnumerateArray())
             {
-                total += ExtractTokens(item);
+                ExtractTokenCounts(item, out var itemPrompt, out var itemCompletion);
+                promptTokens += itemPrompt;
+                completionTokens += itemCompletion;
             }
 
-            return total;
+            return;
         }
 
         if (element.ValueKind != JsonValueKind.Object)
         {
-            return 0;
+            return;
         }
 
         if (element.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
         {
-            if (TryGetInt(usage, "total_tokens", out var totalTokens))
+            if (TryGetInt(usage, "prompt_tokens", out var pt))
             {
-                return totalTokens;
+                promptTokens += pt;
             }
 
-            var usageTotal = 0;
-            if (TryGetInt(usage, "prompt_tokens", out var promptTokens))
+            if (TryGetInt(usage, "completion_tokens", out var ct))
             {
-                usageTotal += promptTokens;
+                completionTokens += ct;
             }
 
-            if (TryGetInt(usage, "completion_tokens", out var completionTokens))
+            if (promptTokens == 0 && completionTokens == 0)
             {
-                usageTotal += completionTokens;
+                if (TryGetInt(usage, "input_tokens", out var it))
+                {
+                    promptTokens += it;
+                }
+
+                if (TryGetInt(usage, "output_tokens", out var ot))
+                {
+                    completionTokens += ot;
+                }
             }
 
-            if (TryGetInt(usage, "input_tokens", out var inputTokens))
+            if (promptTokens > 0 || completionTokens > 0)
             {
-                usageTotal += inputTokens;
-            }
-
-            if (TryGetInt(usage, "output_tokens", out var outputTokens))
-            {
-                usageTotal += outputTokens;
-            }
-
-            if (usageTotal > 0)
-            {
-                return usageTotal;
+                return;
             }
         }
 
-        var ollamaTotal = 0;
-        if (TryGetInt(element, "prompt_eval_count", out var promptEvalCount))
+        if (TryGetInt(element, "prompt_eval_count", out var promptEval))
         {
-            ollamaTotal += promptEvalCount;
+            promptTokens += promptEval;
         }
 
-        if (TryGetInt(element, "eval_count", out var evalCount))
+        if (TryGetInt(element, "eval_count", out var eval))
         {
-            ollamaTotal += evalCount;
+            completionTokens += eval;
         }
-
-        return ollamaTotal;
     }
 
     private static bool TryGetInt(JsonElement element, string propertyName, out int value)
@@ -155,3 +161,5 @@ internal sealed class ResponseTokenCounter
             && property.TryGetInt32(out value);
     }
 }
+
+internal sealed record TokenCounts(int PromptTokens, int CompletionTokens, int TotalTokens);

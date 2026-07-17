@@ -479,6 +479,43 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.balance-display {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.balance-current strong {
+  display: block;
+  font-size: 28px;
+  letter-spacing: 0;
+}
+
+.balance-current span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.balance-detail {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.billing-toggle {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.billing-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 4px;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -494,7 +531,7 @@ tr:last-child td {
   }
 
   .nav {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
 
   .nav a {
