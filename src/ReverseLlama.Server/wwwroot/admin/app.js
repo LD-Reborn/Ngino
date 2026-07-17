@@ -336,7 +336,7 @@ function clientsTable(clients) {
         <div class="cell-main">${number(client.requestStats.total)}</div>
         <div class="cell-sub">${number(client.requestStats.last10Minutes)} in 10m, ${number(client.requestStats.lastHour)} in 1h</div>
       </td>
-      <td>${modelBadges(client.models)}</td>
+      <td class="col-models">${modelBadges(client.models)}</td>
       <td>${modelBadges(client.activeModels)}</td>
       <td>
         <div class="badge-row">

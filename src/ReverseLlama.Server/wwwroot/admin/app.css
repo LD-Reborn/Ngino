@@ -292,6 +292,11 @@ td {
   vertical-align: top;
 }
 
+.col-models {
+  max-width: 40%;
+  overflow-wrap: anywhere;
+}
+
 th {
   color: var(--muted);
   font-size: 12px;
