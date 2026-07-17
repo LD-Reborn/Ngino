@@ -378,7 +378,11 @@ internal sealed class ManagementStore
                         method,
                         path,
                         status_code,
+                        prompt_tokens,
+                        completion_tokens,
                         token_count,
+                        api_key_id,
+                        cost,
                         started_at_utc,
                         completed_at_utc,
                         duration_ms)
@@ -388,7 +392,11 @@ internal sealed class ManagementStore
                         $method,
                         $path,
                         $status_code,
+                        $prompt_tokens,
+                        $completion_tokens,
                         $token_count,
+                        $api_key_id,
+                        $cost,
                         $started_at_utc,
                         $completed_at_utc,
                         $duration_ms)
@@ -398,7 +406,11 @@ internal sealed class ManagementStore
                 command.Parameters.AddWithValue("$method", metric.Method);
                 command.Parameters.AddWithValue("$path", metric.Path);
                 command.Parameters.AddWithValue("$status_code", metric.StatusCode is null ? DBNull.Value : metric.StatusCode.Value);
+                command.Parameters.AddWithValue("$prompt_tokens", metric.PromptTokens);
+                command.Parameters.AddWithValue("$completion_tokens", metric.CompletionTokens);
                 command.Parameters.AddWithValue("$token_count", metric.TokenCount);
+                command.Parameters.AddWithValue("$api_key_id", string.IsNullOrWhiteSpace(metric.ApiKeyId) ? DBNull.Value : metric.ApiKeyId);
+                command.Parameters.AddWithValue("$cost", metric.Cost);
                 command.Parameters.AddWithValue("$started_at_utc", metric.StartedAtUtc.ToString("O"));
                 command.Parameters.AddWithValue("$completed_at_utc", metric.CompletedAtUtc.ToString("O"));
                 command.Parameters.AddWithValue("$duration_ms", metric.Duration.TotalMilliseconds);
@@ -1007,6 +1019,710 @@ internal sealed class ManagementStore
         return frozen;
     }
 
+    public GroupBillingInfo? GetGroupBilling(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT group_id, currency, default_rate_per_1k, refuse_below_balance, enabled, created_at_utc, updated_at_utc
+                FROM group_billing WHERE group_id = $group_id
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new GroupBillingInfo(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetDouble(2),
+                reader.GetDouble(3),
+                reader.GetInt32(4) != 0,
+                ReadDateTimeOffset(reader.GetString(5)),
+                ReadDateTimeOffset(reader.GetString(6)));
+        }
+    }
+
+    public GroupBillingInfo UpsertGroupBilling(
+        string groupId,
+        string currency,
+        double defaultRatePer1k,
+        double refuseBelowBalance,
+        bool enabled)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(groupId))
+        {
+            throw new ArgumentException("Group id is required.", nameof(groupId));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var cur = string.IsNullOrWhiteSpace(currency) ? "EUR" : currency.Trim().ToUpperInvariant();
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO group_billing (group_id, currency, default_rate_per_1k, refuse_below_balance, enabled, created_at_utc, updated_at_utc)
+                VALUES ($group_id, $currency, $default_rate_per_1k, $refuse_below_balance, $enabled, $created_at_utc, $updated_at_utc)
+                ON CONFLICT(group_id) DO UPDATE SET
+                    currency = excluded.currency,
+                    default_rate_per_1k = excluded.default_rate_per_1k,
+                    refuse_below_balance = excluded.refuse_below_balance,
+                    enabled = excluded.enabled,
+                    updated_at_utc = excluded.updated_at_utc
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+            command.Parameters.AddWithValue("$currency", cur);
+            command.Parameters.AddWithValue("$default_rate_per_1k", defaultRatePer1k);
+            command.Parameters.AddWithValue("$refuse_below_balance", refuseBelowBalance);
+            command.Parameters.AddWithValue("$enabled", enabled ? 1 : 0);
+            command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
+            command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
+            command.ExecuteNonQuery();
+        }
+
+        return new GroupBillingInfo(groupId, cur, defaultRatePer1k, refuseBelowBalance, enabled, now, now);
+    }
+
+    public IReadOnlyList<GroupBillingRule> ListGroupBillingRules(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, group_id, model_regex, rate_per_1k, created_at_utc
+                FROM group_billing_rules WHERE group_id = $group_id ORDER BY id
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+
+            var result = new List<GroupBillingRule>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new GroupBillingRule(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetDouble(3),
+                    ReadDateTimeOffset(reader.GetString(4))));
+            }
+
+            return result;
+        }
+    }
+
+    public GroupBillingRule AddBillingRule(string groupId, string modelRegex, double ratePer1k)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(groupId) || string.IsNullOrWhiteSpace(modelRegex))
+        {
+            throw new ArgumentException("Group id and model regex are required.");
+        }
+
+        try
+        {
+            _ = Regex.IsMatch("", modelRegex);
+        }
+        catch (RegexParseException ex)
+        {
+            throw new ArgumentException($"Invalid regex: {ex.Message}", nameof(modelRegex));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO group_billing_rules (group_id, model_regex, rate_per_1k, created_at_utc)
+                VALUES ($group_id, $model_regex, $rate_per_1k, $created_at_utc)
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+            command.Parameters.AddWithValue("$model_regex", modelRegex.Trim());
+            command.Parameters.AddWithValue("$rate_per_1k", ratePer1k);
+            command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
+            command.ExecuteNonQuery();
+
+            using var idCommand = connection.CreateCommand();
+            idCommand.CommandText = "SELECT last_insert_rowid()";
+            var insertedId = (long)idCommand.ExecuteScalar()!;
+            return new GroupBillingRule(insertedId, groupId, modelRegex.Trim(), ratePer1k, now);
+        }
+    }
+
+    public bool UpdateBillingRule(long ruleId, string modelRegex, double ratePer1k)
+    {
+        if (!_isAvailable)
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = Regex.IsMatch("", modelRegex);
+        }
+        catch (RegexParseException ex)
+        {
+            throw new ArgumentException($"Invalid regex: {ex.Message}", nameof(modelRegex));
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE group_billing_rules SET model_regex = $model_regex, rate_per_1k = $rate_per_1k WHERE id = $id
+                """;
+            command.Parameters.AddWithValue("$id", ruleId);
+            command.Parameters.AddWithValue("$model_regex", modelRegex.Trim());
+            command.Parameters.AddWithValue("$rate_per_1k", ratePer1k);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public bool DeleteBillingRule(long ruleId)
+    {
+        if (!_isAvailable)
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM group_billing_rules WHERE id = $id";
+            command.Parameters.AddWithValue("$id", ruleId);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public IReadOnlyList<GroupPayment> ListGroupPayments(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, group_id, amount, description, created_at_utc, created_by
+                FROM group_payments WHERE group_id = $group_id ORDER BY created_at_utc DESC
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+
+            var result = new List<GroupPayment>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new GroupPayment(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetDouble(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    ReadDateTimeOffset(reader.GetString(4)),
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
+            }
+
+            return result;
+        }
+    }
+
+    public GroupPayment AddPayment(string groupId, double amount, string? description, string? createdBy)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(groupId))
+        {
+            throw new ArgumentException("Group id is required.", nameof(groupId));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO group_payments (group_id, amount, description, created_at_utc, created_by)
+                VALUES ($group_id, $amount, $description, $created_at_utc, $created_by)
+                """;
+            command.Parameters.AddWithValue("$group_id", groupId);
+            command.Parameters.AddWithValue("$amount", amount);
+            command.Parameters.AddWithValue("$description", string.IsNullOrWhiteSpace(description) ? DBNull.Value : description.Trim());
+            command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
+            command.Parameters.AddWithValue("$created_by", string.IsNullOrWhiteSpace(createdBy) ? DBNull.Value : createdBy);
+            command.ExecuteNonQuery();
+
+            using var idCommand = connection.CreateCommand();
+            idCommand.CommandText = "SELECT last_insert_rowid()";
+            var insertedId = (long)idCommand.ExecuteScalar()!;
+            return new GroupPayment(insertedId, groupId, amount, description, now, createdBy);
+        }
+    }
+
+    public bool DeletePayment(long paymentId)
+    {
+        if (!_isAvailable)
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM group_payments WHERE id = $id";
+            command.Parameters.AddWithValue("$id", paymentId);
+            return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public GroupBalance GetGroupBalance(string groupId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
+        {
+            return new GroupBalance(groupId ?? "", "EUR", 0, 0, 0);
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+
+            string currency = "EUR";
+            using (var billingCmd = connection.CreateCommand())
+            {
+                billingCmd.CommandText = "SELECT currency FROM group_billing WHERE group_id = $group_id";
+                billingCmd.Parameters.AddWithValue("$group_id", groupId);
+                var curResult = billingCmd.ExecuteScalar();
+                if (curResult is not null)
+                {
+                    currency = curResult.ToString() ?? "EUR";
+                }
+            }
+
+            double totalPayments = 0;
+            using (var payCmd = connection.CreateCommand())
+            {
+                payCmd.CommandText = "SELECT COALESCE(SUM(amount), 0) FROM group_payments WHERE group_id = $group_id";
+                payCmd.Parameters.AddWithValue("$group_id", groupId);
+                totalPayments = Convert.ToDouble(payCmd.ExecuteScalar());
+            }
+
+            double totalCosts = 0;
+            using (var costCmd = connection.CreateCommand())
+            {
+                costCmd.CommandText = """
+                    SELECT COALESCE(SUM(rm.cost), 0)
+                    FROM request_metrics rm
+                    INNER JOIN api_key_groups akg ON rm.api_key_id = akg.api_key_id
+                    WHERE akg.group_id = $group_id AND rm.api_key_id IS NOT NULL
+                    """;
+                costCmd.Parameters.AddWithValue("$group_id", groupId);
+                totalCosts = Convert.ToDouble(costCmd.ExecuteScalar());
+            }
+
+            return new GroupBalance(groupId, currency, totalPayments, totalCosts, totalPayments - totalCosts);
+        }
+    }
+
+    public GroupBillingInfo? ResolveBillingForApiKey(string? apiKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT gb.group_id, gb.currency, gb.default_rate_per_1k, gb.refuse_below_balance, gb.enabled, gb.created_at_utc, gb.updated_at_utc
+                FROM group_billing gb
+                INNER JOIN api_key_groups akg ON gb.group_id = akg.group_id
+                WHERE akg.api_key_id = $api_key_id AND gb.enabled = 1
+                ORDER BY gb.created_at_utc ASC
+                LIMIT 1
+                """;
+            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+            {
+                return null;
+            }
+
+            return new GroupBillingInfo(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetDouble(2),
+                reader.GetDouble(3),
+                reader.GetInt32(4) != 0,
+                ReadDateTimeOffset(reader.GetString(5)),
+                ReadDateTimeOffset(reader.GetString(6)));
+        }
+    }
+
+    public double CalculateCost(string groupId, string? model, int totalTokens)
+    {
+        if (totalTokens <= 0)
+        {
+            return 0;
+        }
+
+        lock (_lock)
+        {
+            var rules = ListGroupBillingRulesLocked(groupId);
+            var billing = GetGroupBillingLocked(groupId);
+
+            if (billing is null)
+            {
+                return 0;
+            }
+
+            var ratePer1k = billing.DefaultRatePer1k;
+
+            if (!string.IsNullOrWhiteSpace(model))
+            {
+                foreach (var rule in rules)
+                {
+                    try
+                    {
+                        if (Regex.IsMatch(model, rule.ModelRegex, RegexOptions.IgnoreCase))
+                        {
+                            ratePer1k = rule.RatePer1k;
+                            break;
+                        }
+                    }
+                    catch (RegexParseException)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            return (totalTokens / 1000.0) * ratePer1k;
+        }
+    }
+
+    public (bool Allowed, double Balance, string Currency, double Threshold) CheckBalanceForApiKey(string? apiKeyId)
+    {
+        var billing = ResolveBillingForApiKey(apiKeyId);
+        if (billing is null)
+        {
+            return (true, 0, "", 0);
+        }
+
+        var balance = GetGroupBalance(billing.GroupId);
+        var allowed = balance.Balance >= billing.RefuseBelowBalance;
+        return (allowed, balance.Balance, billing.Currency, billing.RefuseBelowBalance);
+    }
+
+    public IReadOnlyList<TokenStatsByModel> GetTokenStatsByModel()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT model,
+                    COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(token_count), 0),
+                    COUNT(*)
+                FROM request_metrics
+                WHERE model IS NOT NULL AND model <> ''
+                GROUP BY model
+                ORDER BY model
+                """;
+
+            var result = new List<TokenStatsByModel>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new TokenStatsByModel(
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4)));
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<TokenStatsByClient> GetTokenStatsByClient()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT client_id,
+                    COALESCE(SUM(prompt_tokens), 0),
+                    COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(token_count), 0),
+                    COUNT(*)
+                FROM request_metrics
+                GROUP BY client_id
+                ORDER BY client_id
+                """;
+
+            var result = new List<TokenStatsByClient>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new TokenStatsByClient(
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4)));
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<TokenStatsByApiKey> GetTokenStatsByApiKey()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT rm.api_key_id, COALESCE(ak.name, 'Unknown'), COALESCE(ak.key_prefix, ''),
+                    COALESCE(SUM(rm.prompt_tokens), 0),
+                    COALESCE(SUM(rm.completion_tokens), 0),
+                    COALESCE(SUM(rm.token_count), 0),
+                    COUNT(*)
+                FROM request_metrics rm
+                LEFT JOIN api_keys ak ON rm.api_key_id = ak.id
+                WHERE rm.api_key_id IS NOT NULL
+                GROUP BY rm.api_key_id
+                ORDER BY ak.name
+                """;
+
+            var result = new List<TokenStatsByApiKey>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new TokenStatsByApiKey(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4),
+                    reader.GetInt64(5),
+                    reader.GetInt64(6)));
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<TokenStatsByGroup> GetTokenStatsByGroup()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT akg.group_id, COALESCE(g.name, 'Unknown'),
+                    COALESCE(SUM(rm.prompt_tokens), 0),
+                    COALESCE(SUM(rm.completion_tokens), 0),
+                    COALESCE(SUM(rm.token_count), 0),
+                    COUNT(*)
+                FROM request_metrics rm
+                INNER JOIN api_key_groups akg ON rm.api_key_id = akg.api_key_id
+                INNER JOIN groups g ON akg.group_id = g.id
+                WHERE rm.api_key_id IS NOT NULL
+                GROUP BY akg.group_id
+                ORDER BY g.name
+                """;
+
+            var result = new List<TokenStatsByGroup>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new TokenStatsByGroup(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt64(2),
+                    reader.GetInt64(3),
+                    reader.GetInt64(4),
+                    reader.GetInt64(5)));
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<ClientRevenue> GetClientRevenue()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT rm.client_id,
+                    COALESCE(SUM(rm.cost), 0)
+                FROM request_metrics rm
+                WHERE rm.api_key_id IS NOT NULL AND rm.cost > 0
+                GROUP BY rm.client_id
+                ORDER BY rm.client_id
+                """;
+
+            var result = new List<ClientRevenue>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var clientId = reader.GetString(0);
+                var revenue = reader.GetDouble(1);
+
+                var billing = ResolveBillingForApiKeyForClientLocked(clientId);
+                var currency = billing?.Currency ?? "EUR";
+
+                result.Add(new ClientRevenue(clientId, revenue, currency));
+            }
+
+            return result;
+        }
+    }
+
+    public IReadOnlyList<GroupBillingRule> ListGroupBillingRulesLocked(string groupId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, group_id, model_regex, rate_per_1k, created_at_utc
+            FROM group_billing_rules WHERE group_id = $group_id ORDER BY id
+            """;
+        command.Parameters.AddWithValue("$group_id", groupId);
+
+        var result = new List<GroupBillingRule>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new GroupBillingRule(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetDouble(3),
+                ReadDateTimeOffset(reader.GetString(4))));
+        }
+
+        return result;
+    }
+
+    private GroupBillingInfo? GetGroupBillingLocked(string groupId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT group_id, currency, default_rate_per_1k, refuse_below_balance, enabled, created_at_utc, updated_at_utc
+            FROM group_billing WHERE group_id = $group_id
+            """;
+        command.Parameters.AddWithValue("$group_id", groupId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new GroupBillingInfo(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetDouble(2),
+            reader.GetDouble(3),
+            reader.GetInt32(4) != 0,
+            ReadDateTimeOffset(reader.GetString(5)),
+            ReadDateTimeOffset(reader.GetString(6)));
+    }
+
+    private GroupBillingInfo? ResolveBillingForApiKeyForClientLocked(string clientId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT gb.group_id, gb.currency, gb.default_rate_per_1k, gb.refuse_below_balance, gb.enabled, gb.created_at_utc, gb.updated_at_utc
+            FROM group_billing gb
+            INNER JOIN api_key_groups akg ON gb.group_id = akg.group_id
+            INNER JOIN request_metrics rm ON rm.api_key_id = akg.api_key_id
+            WHERE rm.client_id = $client_id AND gb.enabled = 1
+            ORDER BY gb.created_at_utc ASC
+            LIMIT 1
+            """;
+        command.Parameters.AddWithValue("$client_id", clientId);
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new GroupBillingInfo(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetDouble(2),
+            reader.GetDouble(3),
+            reader.GetInt32(4) != 0,
+            ReadDateTimeOffset(reader.GetString(5)),
+            ReadDateTimeOffset(reader.GetString(6)));
+    }
+
     private IReadOnlyList<string> GetApiKeyGroupIdsLocked(string apiKeyId)
     {
         using var connection = OpenConnection();
@@ -1111,6 +1827,74 @@ internal sealed class ManagementStore
                 );
                 """;
             command.ExecuteNonQuery();
+
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('request_metrics') WHERE name = 'prompt_tokens'
+                """;
+            var hasColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasColumn)
+            {
+                using var alter1 = connection.CreateCommand();
+                alter1.CommandText = "ALTER TABLE request_metrics ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0";
+                alter1.ExecuteNonQuery();
+
+                using var alter2 = connection.CreateCommand();
+                alter2.CommandText = "ALTER TABLE request_metrics ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0";
+                alter2.ExecuteNonQuery();
+
+                using var alter3 = connection.CreateCommand();
+                alter3.CommandText = "ALTER TABLE request_metrics ADD COLUMN api_key_id TEXT NULL";
+                alter3.ExecuteNonQuery();
+
+                using var alter4 = connection.CreateCommand();
+                alter4.CommandText = "ALTER TABLE request_metrics ADD COLUMN cost REAL NOT NULL DEFAULT 0";
+                alter4.ExecuteNonQuery();
+
+                using var idx = connection.CreateCommand();
+                idx.CommandText = "CREATE INDEX IF NOT EXISTS idx_request_metrics_api_key ON request_metrics (api_key_id, started_at_utc)";
+                idx.ExecuteNonQuery();
+            }
+        }
+
+        using (var command2 = connection.CreateCommand())
+        {
+            command2.CommandText = """
+                CREATE TABLE IF NOT EXISTS group_billing (
+                    group_id              TEXT NOT NULL PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
+                    currency              TEXT NOT NULL DEFAULT 'EUR',
+                    default_rate_per_1k   REAL NOT NULL DEFAULT 0.0,
+                    refuse_below_balance  REAL NOT NULL DEFAULT 0.0,
+                    enabled               INTEGER NOT NULL DEFAULT 0,
+                    created_at_utc        TEXT NOT NULL,
+                    updated_at_utc        TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS group_billing_rules (
+                    id              INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    group_id        TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    model_regex     TEXT NOT NULL,
+                    rate_per_1k     REAL NOT NULL,
+                    created_at_utc  TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_group_billing_rules_group ON group_billing_rules (group_id);
+
+                CREATE TABLE IF NOT EXISTS group_payments (
+                    id              INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    group_id        TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    amount          REAL NOT NULL,
+                    description     TEXT NULL,
+                    created_at_utc  TEXT NOT NULL,
+                    created_by      TEXT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_group_payments_group ON group_payments (group_id);
+                """;
+            command2.ExecuteNonQuery();
+        }
         }
 
         using (var command = connection.CreateCommand())
@@ -1240,7 +2024,11 @@ internal sealed record RequestMetric(
     string Method,
     string Path,
     int? StatusCode,
+    int PromptTokens,
+    int CompletionTokens,
     int TokenCount,
+    string? ApiKeyId,
+    double Cost,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset CompletedAtUtc,
     TimeSpan Duration);
@@ -1256,6 +2044,73 @@ internal sealed record ModelUsageStats(
     long RequestsLastHour,
     long TokensLast10Minutes,
     long TokensLastHour);
+
+internal sealed record GroupBillingInfo(
+    string GroupId,
+    string Currency,
+    double DefaultRatePer1k,
+    double RefuseBelowBalance,
+    bool Enabled,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+internal sealed record GroupBillingRule(
+    long Id,
+    string GroupId,
+    string ModelRegex,
+    double RatePer1k,
+    DateTimeOffset CreatedAtUtc);
+
+internal sealed record GroupPayment(
+    long Id,
+    string GroupId,
+    double Amount,
+    string? Description,
+    DateTimeOffset CreatedAtUtc,
+    string? CreatedBy);
+
+internal sealed record GroupBalance(
+    string GroupId,
+    string Currency,
+    double TotalPayments,
+    double TotalCosts,
+    double Balance);
+
+internal sealed record TokenStatsByModel(
+    string Model,
+    long PromptTokens,
+    long CompletionTokens,
+    long TotalTokens,
+    long Requests);
+
+internal sealed record TokenStatsByClient(
+    string ClientId,
+    long PromptTokens,
+    long CompletionTokens,
+    long TotalTokens,
+    long Requests);
+
+internal sealed record TokenStatsByApiKey(
+    string ApiKeyId,
+    string ApiKeyName,
+    string ApiKeyPrefix,
+    long PromptTokens,
+    long CompletionTokens,
+    long TotalTokens,
+    long Requests);
+
+internal sealed record TokenStatsByGroup(
+    string GroupId,
+    string GroupName,
+    long PromptTokens,
+    long CompletionTokens,
+    long TotalTokens,
+    long Requests);
+
+internal sealed record ClientRevenue(
+    string ClientId,
+    double Revenue,
+    string Currency);
 
 internal sealed record GroupInfo(
     string Id,

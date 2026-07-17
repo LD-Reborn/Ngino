@@ -294,6 +294,152 @@ internal static class AdminEndpoints
             }
         });
 
+        api.MapGet("/groups/{id}/billing", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            var billing = store.GetGroupBilling(id);
+            return billing is not null
+                ? Results.Json(billing)
+                : Results.Json(new GroupBillingInfo(id, "EUR", 0, 0, false, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow));
+        });
+
+        api.MapPut("/groups/{id}/billing", (string id, UpdateBillingRequest request, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            try
+            {
+                var billing = store.UpsertGroupBilling(
+                    id,
+                    request.Currency ?? "EUR",
+                    request.DefaultRatePer1k,
+                    request.RefuseBelowBalance,
+                    request.Enabled);
+                return Results.Ok(billing);
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapGet("/groups/{id}/billing/rules", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            return Results.Json(store.ListGroupBillingRules(id));
+        });
+
+        api.MapPost("/groups/{id}/billing/rules", (string id, AddBillingRuleRequest request, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            try
+            {
+                var rule = store.AddBillingRule(id, request.ModelRegex, request.RatePer1k);
+                return Results.Json(rule);
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapPut("/groups/{id}/billing/rules/{ruleId:long}", (string id, long ruleId, UpdateBillingRuleRequest request, ManagementStore store) =>
+        {
+            try
+            {
+                return store.UpdateBillingRule(ruleId, request.ModelRegex, request.RatePer1k)
+                    ? Results.Ok(new { id = ruleId })
+                    : Results.NotFound(new { error = $"Rule '{ruleId}' was not found." });
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapDelete("/groups/{id}/billing/rules/{ruleId:long}", (string id, long ruleId, ManagementStore store) =>
+            store.DeleteBillingRule(ruleId)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = $"Rule '{ruleId}' was not found." }));
+
+        api.MapGet("/groups/{id}/billing/payments", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            return Results.Json(store.ListGroupPayments(id));
+        });
+
+        api.MapPost("/groups/{id}/billing/payments", (string id, AddPaymentRequest request, ManagementStore store, HttpContext context) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            try
+            {
+                var userName = GetUserName(context.User);
+                var payment = store.AddPayment(id, request.Amount, request.Description, userName);
+                return Results.Json(payment);
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapDelete("/groups/{id}/billing/payments/{paymentId:long}", (string id, long paymentId, ManagementStore store) =>
+            store.DeletePayment(paymentId)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = $"Payment '{paymentId}' was not found." }));
+
+        api.MapGet("/groups/{id}/billing/balance", (string id, ManagementStore store) =>
+        {
+            var group = store.GetGroup(id);
+            if (group is null)
+            {
+                return Results.NotFound(new { error = $"Group '{id}' was not found." });
+            }
+
+            return Results.Json(store.GetGroupBalance(id));
+        });
+
+        api.MapGet("/usage/tokens", (ManagementStore store) =>
+            Results.Json(new
+            {
+                byModel = store.GetTokenStatsByModel(),
+                byClient = store.GetTokenStatsByClient(),
+                byApiKey = store.GetTokenStatsByApiKey(),
+                byGroup = store.GetTokenStatsByGroup()
+            }));
+
+        api.MapGet("/usage/revenue", (ManagementStore store) =>
+            Results.Json(store.GetClientRevenue()));
+
         var adminHome = app.MapGet("/admin", (IWebHostEnvironment environment) =>
             ServeAdminAsset(environment, null));
         var adminAssets = app.MapGet("/admin/{**assetPath}", (IWebHostEnvironment environment, string? assetPath) =>
@@ -593,6 +739,24 @@ internal sealed record AddGroupClientRequest(
     string? ClientPattern);
 
 internal sealed record SetApiKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
+
+internal sealed record UpdateBillingRequest(
+    string? Currency,
+    double DefaultRatePer1k,
+    double RefuseBelowBalance,
+    bool Enabled);
+
+internal sealed record AddBillingRuleRequest(
+    string ModelRegex,
+    double RatePer1k);
+
+internal sealed record UpdateBillingRuleRequest(
+    string ModelRegex,
+    double RatePer1k);
+
+internal sealed record AddPaymentRequest(
+    double Amount,
+    string? Description);
 
 internal sealed record ClientSummary(
     string Id,
