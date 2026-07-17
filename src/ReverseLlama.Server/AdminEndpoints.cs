@@ -225,7 +225,7 @@ internal static class AdminEndpoints
                 ? Results.NoContent()
                 : Results.NotFound(new { error = $"Group '{id}' was not found." }));
 
-        api.MapGet("/groups/{id}/members", (string id, ManagementStore store) =>
+        api.MapGet("/groups/{id}/clients", (string id, ManagementStore store) =>
         {
             var group = store.GetGroup(id);
             if (group is null)
@@ -233,10 +233,10 @@ internal static class AdminEndpoints
                 return Results.NotFound(new { error = $"Group '{id}' was not found." });
             }
 
-            return Results.Json(store.ListGroupMembers(id));
+            return Results.Json(store.ListGroupClients(id));
         });
 
-        api.MapPost("/groups/{id}/members", (string id, AddGroupMemberRequest request, ManagementStore store) =>
+        api.MapPost("/groups/{id}/clients", (string id, AddGroupClientRequest request, ManagementStore store) =>
         {
             var group = store.GetGroup(id);
             if (group is null)
@@ -246,7 +246,7 @@ internal static class AdminEndpoints
 
             try
             {
-                var member = store.AddGroupMember(id, request.ClientId, request.Model, request.ClientPattern);
+                var member = store.AddGroupClient(id, request.ClientId, request.Model, request.ClientPattern);
                 return Results.Json(member);
             }
             catch (ArgumentException exception)
@@ -259,7 +259,7 @@ internal static class AdminEndpoints
             }
         });
 
-        api.MapDelete("/groups/{groupId}/members/{memberId:long}", (string groupId, long memberId, ManagementStore store) =>
+        api.MapDelete("/groups/{groupId}/clients/{clientId:long}", (string groupId, long clientId, ManagementStore store) =>
         {
             var group = store.GetGroup(groupId);
             if (group is null)
@@ -267,9 +267,9 @@ internal static class AdminEndpoints
                 return Results.NotFound(new { error = $"Group '{groupId}' was not found." });
             }
 
-            return store.RemoveGroupMember(memberId)
+            return store.RemoveGroupClient(clientId)
                 ? Results.NoContent()
-                : Results.NotFound(new { error = $"Member '{memberId}' was not found." });
+                : Results.NotFound(new { error = $"Client '{clientId}' was not found." });
         });
 
         api.MapGet("/api-keys/groups", (ManagementStore store) =>
@@ -587,7 +587,7 @@ internal sealed record CreateGroupRequest(string? Name);
 
 internal sealed record UpdateGroupRequest(string Name);
 
-internal sealed record AddGroupMemberRequest(
+internal sealed record AddGroupClientRequest(
     string? ClientId,
     string? Model,
     string? ClientPattern);

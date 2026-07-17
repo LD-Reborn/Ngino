@@ -634,7 +634,7 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<GroupMemberInfo> ListGroupMembers(string groupId)
+    public IReadOnlyList<GroupClientInfo> ListGroupClients(string groupId)
     {
         if (!_isAvailable || string.IsNullOrWhiteSpace(groupId))
         {
@@ -653,11 +653,11 @@ internal sealed class ManagementStore
                 """;
             command.Parameters.AddWithValue("$group_id", groupId);
 
-            var result = new List<GroupMemberInfo>();
+            var result = new List<GroupClientInfo>();
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                result.Add(new GroupMemberInfo(
+                result.Add(new GroupClientInfo(
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
@@ -669,7 +669,7 @@ internal sealed class ManagementStore
         }
     }
 
-    public GroupMemberInfo AddGroupMember(string groupId, string? clientId, string? model, string? clientPattern)
+    public GroupClientInfo AddGroupClient(string groupId, string? clientId, string? model, string? clientPattern)
     {
         EnsureAvailable();
 
@@ -712,11 +712,11 @@ internal sealed class ManagementStore
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
             var insertedId = (long)idCommand.ExecuteScalar()!;
-            return new GroupMemberInfo(insertedId, groupId, clientId, model, clientPattern);
+            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern);
         }
     }
 
-    public bool RemoveGroupMember(long memberId)
+    public bool RemoveGroupClient(long memberId)
     {
         if (!_isAvailable)
         {
@@ -1257,7 +1257,7 @@ internal sealed record GroupInfo(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset UpdatedAtUtc);
 
-internal sealed record GroupMemberInfo(
+internal sealed record GroupClientInfo(
     long Id,
     string GroupId,
     string? ClientId,

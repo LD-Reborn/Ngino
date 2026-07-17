@@ -70,7 +70,7 @@ content.addEventListener("click", async (event) => {
     }
 
     if (action === "delete-group") {
-      if (!confirm("Delete this group and all its members and key assignments?")) {
+      if (!confirm("Delete this group and all its clients and key assignments?")) {
         return;
       }
 
@@ -80,13 +80,13 @@ content.addEventListener("click", async (event) => {
       await refresh();
     }
 
-    if (action === "remove-member") {
-      if (!confirm("Remove this member from the group?")) {
+    if (action === "remove-client") {
+      if (!confirm("Remove this client from the group?")) {
         return;
       }
 
-      await api(`/groups/${encodeURIComponent(groupId)}/members/${memberId}`, { method: "DELETE" });
-      setNotice("Member removed.");
+      await api(`/groups/${encodeURIComponent(groupId)}/clients/${memberId}`, { method: "DELETE" });
+      setNotice("Client removed.");
       await loadGroupDetail(groupId);
     }
 
@@ -153,7 +153,7 @@ content.addEventListener("submit", async (event) => {
       await loadGroupDetail(groupId);
     }
 
-    if (form.dataset.form === "add-member") {
+    if (form.dataset.form === "add-client") {
       const groupId = form.dataset.groupId;
       const body = {};
       if (data.clientId && data.clientId.trim()) {
@@ -170,11 +170,11 @@ content.addEventListener("submit", async (event) => {
         throw new Error("Either Client ID or Client pattern is required.");
       }
 
-      await api(`/groups/${encodeURIComponent(groupId)}/members`, {
+      await api(`/groups/${encodeURIComponent(groupId)}/clients`, {
         method: "POST",
         body
       });
-      setNotice("Member added.");
+      setNotice("Client added.");
       form.reset();
       await loadGroupDetail(groupId);
     }
@@ -731,13 +731,13 @@ async function loadGroupDetail(groupId) {
   content.innerHTML = `<div class="panel"><div class="empty">Loading group...</div></div>`;
 
   try {
-    const [group, members, apiKeyGroups] = await Promise.all([
+    const [group, clients, apiKeyGroups] = await Promise.all([
       api(`/groups/${encodeURIComponent(groupId)}`),
-      api(`/groups/${encodeURIComponent(groupId)}/members`),
+      api(`/groups/${encodeURIComponent(groupId)}/clients`),
       api("/api-keys/groups")
     ]);
 
-    state.groupDetail = { group, members, apiKeyGroups };
+    state.groupDetail = { group, clients, apiKeyGroups };
     renderGroupDetail();
   } catch (error) {
     content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
@@ -745,7 +745,7 @@ async function loadGroupDetail(groupId) {
 }
 
 function renderGroupDetail() {
-  const { group, members, apiKeyGroups } = state.groupDetail;
+  const { group, clients, apiKeyGroups } = state.groupDetail;
   const allApiKeys = state.summary?.apiKeys || [];
   const assignedKeyIds = new Set(
     apiKeyGroups
@@ -776,21 +776,21 @@ function renderGroupDetail() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>Add member</h2>
+        <h2>Add client</h2>
       </div>
       <div class="panel-body">
-        <form class="form-row" data-form="add-member" data-group-id="${escapeAttr(group.id)}">
+        <form class="form-row" data-form="add-client" data-group-id="${escapeAttr(group.id)}">
           <div class="field">
-            <label for="addMemberClient">Client ID</label>
-            <input class="input" id="addMemberClient" name="clientId" placeholder="Client_1">
+            <label for="addClientClientId">Client ID</label>
+            <input class="input" id="addClientClientId" name="clientId" placeholder="Client_1">
           </div>
           <div class="field">
-            <label for="addMemberModel">Model (optional)</label>
-            <input class="input" id="addMemberModel" name="model" placeholder="bge-m3">
+            <label for="addClientModel">Model (optional)</label>
+            <input class="input" id="addClientModel" name="model" placeholder="bge-m3">
           </div>
           <div class="field">
-            <label for="addMemberPattern">Client pattern (regex, optional)</label>
-            <input class="input" id="addMemberPattern" name="clientPattern" placeholder="GPU_[0-9]*">
+            <label for="addClientPattern">Client pattern (regex, optional)</label>
+            <input class="input" id="addClientPattern" name="clientPattern" placeholder="GPU_[0-9]*">
           </div>
           <button class="button" type="submit">Add</button>
         </form>
@@ -799,11 +799,11 @@ function renderGroupDetail() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>Members</h2>
-        <span class="badge">${members.length} total</span>
+        <h2>Clients</h2>
+        <span class="badge">${clients.length} total</span>
       </div>
       <div class="table-wrap">
-        ${members.length ? groupMembersTable(members, group.id) : emptyState("No members in this group.")}
+        ${clients.length ? groupClientsTable(clients, group.id) : emptyState("No clients in this group.")}
       </div>
     </div>
     <div class="panel">
@@ -817,29 +817,29 @@ function renderGroupDetail() {
   `;
 }
 
-function groupMembersTable(members, groupId) {
-  const rows = members.map((member) => `
+function groupClientsTable(clients, groupId) {
+  const rows = clients.map((client) => `
     <tr>
       <td>
-        ${member.clientId
-          ? `<div class="cell-main">${escapeHtml(member.clientId)}</div>`
+        ${client.clientId
+          ? `<div class="cell-main">${escapeHtml(client.clientId)}</div>`
           : `<div class="cell-sub">-</div>`
         }
       </td>
       <td>
-        ${member.model
-          ? `<div class="cell-main">${escapeHtml(member.model)}</div>`
+        ${client.model
+          ? `<div class="cell-main">${escapeHtml(client.model)}</div>`
           : `<div class="cell-sub">All models</div>`
         }
       </td>
       <td>
-        ${member.clientPattern
-          ? `<div class="cell-main code-inline">${escapeHtml(member.clientPattern)}</div>`
+        ${client.clientPattern
+          ? `<div class="cell-main code-inline">${escapeHtml(client.clientPattern)}</div>`
           : `<div class="cell-sub">-</div>`
         }
       </td>
       <td>
-        <button class="button danger" data-action="remove-member" data-group-id="${escapeAttr(groupId)}" data-member-id="${member.id}">Remove</button>
+        <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${client.id}">Remove</button>
       </td>
     </tr>
   `).join("");
