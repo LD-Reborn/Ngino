@@ -871,7 +871,7 @@ internal sealed class ManagementStore
             var groupIds = GetApiKeyGroupIdsLocked(apiKeyId);
             if (groupIds.Count == 0)
             {
-                return GroupAccess.Unrestricted;
+                return GroupAccess.Empty;
             }
 
             var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1280,6 +1280,8 @@ internal sealed record ApiKeyGroupInfo(
 internal sealed class GroupAccess
 {
     public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
+
+    public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>());
 
     public IReadOnlySet<string> ClientModels { get; }
 
