@@ -35,12 +35,15 @@ internal static class ReverseProxyEndpoint
         EmbeddingCache embeddingCache,
         ManagementStore managementStore)
     {
-        if (!TokenAuthentication.IsAuthorized(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true))
+        var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
+        if (!auth.IsAuthorized)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(UnauthorizedMessage, context.RequestAborted);
             return;
         }
+
+        var groupAccess = ResolveGroupAccess(auth.ApiKeyId, managementStore);
 
         var pathTokenRemoved = TokenAuthentication.TryRemovePathToken(context.Request.Path, settings, managementStore, out var proxyPath);
         if (!pathTokenRemoved)
@@ -56,6 +59,13 @@ internal static class ReverseProxyEndpoint
 
         if (TryGetClientAddress(proxyPath, out var pathClientId, out var clientPath))
         {
+            if (!groupAccess.IsClientAllowed(pathClientId))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await context.Response.WriteAsync($"Access to client '{pathClientId}' is not permitted.", context.RequestAborted);
+                return;
+            }
+
             await ForwardToClientAsync(
                 context,
                 pathClientId,
@@ -65,7 +75,14 @@ internal static class ReverseProxyEndpoint
                 settings,
                 loggerFactory,
                 embeddingCache,
-                managementStore);
+                managementStore,
+                groupAccess);
+            return;
+        }
+
+        if (IsTagsRequest(context.Request, proxyPath))
+        {
+            await HandleTagsAsync(context, hub, managementStore, groupAccess);
             return;
         }
 
@@ -79,7 +96,10 @@ internal static class ReverseProxyEndpoint
         var requestedModel = embeddingRequest?.Model ?? await GetRequestedModelAsync(context.Request, proxyPath);
         var connection = hub.SelectBest(
             requestedModel,
-            clientId => !managementStore.GetClientAccess(clientId).IsDisabled);
+            clientId => !managementStore.GetClientAccess(clientId).IsDisabled
+                && (requestedModel is null
+                    ? groupAccess.IsClientAllowed(clientId)
+                    : groupAccess.IsClientModelAllowed(clientId, requestedModel)));
         if (connection is null)
         {
             if (!hub.HasClient)
@@ -117,10 +137,19 @@ internal static class ReverseProxyEndpoint
         EmbeddingCache embeddingCache,
         ManagementStore managementStore)
     {
-        if (!TokenAuthentication.IsAuthorized(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true))
+        var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
+        if (!auth.IsAuthorized)
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsync(UnauthorizedMessage, context.RequestAborted);
+            return;
+        }
+
+        var groupAccess = ResolveGroupAccess(auth.ApiKeyId, managementStore);
+        if (!groupAccess.IsClientAllowed(clientId))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsync($"Access to client '{clientId}' is not permitted.", context.RequestAborted);
             return;
         }
 
@@ -135,7 +164,8 @@ internal static class ReverseProxyEndpoint
             settings,
             loggerFactory,
             embeddingCache,
-            managementStore);
+            managementStore,
+            groupAccess);
     }
 
     private static async Task ForwardToClientAsync(
@@ -147,7 +177,8 @@ internal static class ReverseProxyEndpoint
         ServerSettings settings,
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
-        ManagementStore managementStore)
+        ManagementStore managementStore,
+        GroupAccess? groupAccess = null)
     {
         var clientAccess = managementStore.GetClientAccess(clientId);
         if (clientAccess.IsDisabled)
@@ -173,6 +204,13 @@ internal static class ReverseProxyEndpoint
         }
 
         var requestedModel = embeddingRequest?.Model ?? await GetRequestedModelAsync(context.Request, clientPath);
+        if (requestedModel is not null && groupAccess is not null && !groupAccess.IsClientModelAllowed(clientId, requestedModel))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsync($"Access to model '{requestedModel}' on client '{clientId}' is not permitted.", context.RequestAborted);
+            return;
+        }
+
         await ForwardAsync(
             context,
             connection,
@@ -229,6 +267,69 @@ internal static class ReverseProxyEndpoint
             ? new PathString("/")
             : new PathString(value[nextSlash..]);
         return true;
+    }
+
+    private static GroupAccess ResolveGroupAccess(string? apiKeyId, ManagementStore managementStore)
+    {
+        if (string.IsNullOrWhiteSpace(apiKeyId))
+        {
+            return GroupAccess.Unrestricted;
+        }
+
+        return managementStore.ResolveGroupAccess(apiKeyId);
+    }
+
+    private static bool IsTagsRequest(HttpRequest request, PathString proxyPath) =>
+        HttpMethods.IsGet(request.Method)
+        && string.Equals(proxyPath.Value, "/api/tags", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task HandleTagsAsync(
+        HttpContext context,
+        TunnelHub hub,
+        ManagementStore managementStore,
+        GroupAccess groupAccess)
+    {
+        var models = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var client in hub.ClientSnapshots)
+        {
+            foreach (var model in client.Models)
+            {
+                if (!models.TryGetValue(model, out var clients))
+                {
+                    clients = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                    models[model] = clients;
+                }
+
+                clients.Add(client.Id);
+            }
+        }
+
+        var filteredModels = new List<object>();
+        foreach (var (model, clients) in models.OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var accessibleClients = clients
+                .Where(clientId => groupAccess.IsClientModelAllowed(clientId, model))
+                .ToList();
+
+            if (accessibleClients.Count > 0)
+            {
+                filteredModels.Add(new
+                {
+                    name = model,
+                    model,
+                    modified_at = DateTimeOffset.UtcNow,
+                    size = 0,
+                    digest = "",
+                    details = new { }
+                });
+            }
+        }
+
+        var response = new { models = filteredModels };
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(response, context.RequestAborted);
     }
 
     private static string GetNoRouteMessage(string? requestedModel) =>

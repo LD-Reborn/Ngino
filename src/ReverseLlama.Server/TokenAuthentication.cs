@@ -6,7 +6,7 @@ internal static class TokenAuthentication
 {
     private static readonly PathString PathTokenPrefix = new("/token");
 
-    public static bool IsAuthorized(
+    public static AuthResult Authorize(
         HttpRequest request,
         ServerSettings settings,
         ManagementStore managementStore,
@@ -15,35 +15,69 @@ internal static class TokenAuthentication
     {
         if (string.IsNullOrWhiteSpace(settings.Token) && !managementStore.HasApiKeys)
         {
-            return true;
+            return AuthResult.Success(null);
         }
 
-        if (request.Headers.TryGetValue(ProtocolConstants.TokenHeader, out var headerValues)
-            && headerValues.Any(value => IsTokenAuthorized(value, settings, managementStore, updateApiKeyLastUsed: true)))
+        if (request.Headers.TryGetValue(ProtocolConstants.TokenHeader, out var headerValues))
         {
-            return true;
+            foreach (var value in headerValues)
+            {
+                var result = AuthorizeToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                if (result.IsAuthorized)
+                {
+                    return result;
+                }
+            }
         }
 
-        // Bearer form for OpenAI-compatible clients (e.g. n8n's OpenAI nodes pointed
-        // at /clients/{id}/v1) that can send an API key but no custom headers.
-        if (request.Headers.TryGetValue("Authorization", out var authorizationValues)
-            && authorizationValues.Any(value => TryGetBearerToken(value, out var bearerToken)
-                && IsTokenAuthorized(bearerToken, settings, managementStore, updateApiKeyLastUsed: true)))
+        if (request.Headers.TryGetValue("Authorization", out var authorizationValues))
         {
-            return true;
+            foreach (var value in authorizationValues)
+            {
+                if (TryGetBearerToken(value, out var bearerToken))
+                {
+                    var result = AuthorizeToken(bearerToken, settings, managementStore, updateApiKeyLastUsed: true);
+                    if (result.IsAuthorized)
+                    {
+                        return result;
+                    }
+                }
+            }
         }
 
         if (allowPathToken
-            && TryGetPathToken(request.Path, out var pathToken, out _)
-            && IsTokenAuthorized(pathToken, settings, managementStore, updateApiKeyLastUsed: true))
+            && TryGetPathToken(request.Path, out var pathToken, out _))
         {
-            return true;
+            var result = AuthorizeToken(pathToken, settings, managementStore, updateApiKeyLastUsed: true);
+            if (result.IsAuthorized)
+            {
+                return result;
+            }
         }
 
-        return allowQueryToken
-            && request.Query.TryGetValue("token", out var queryValues)
-            && queryValues.Any(value => IsTokenAuthorized(value, settings, managementStore, updateApiKeyLastUsed: true));
+        if (allowQueryToken
+            && request.Query.TryGetValue("token", out var queryValues))
+        {
+            foreach (var value in queryValues)
+            {
+                var result = AuthorizeToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                if (result.IsAuthorized)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return AuthResult.Failure;
     }
+
+    public static bool IsAuthorized(
+        HttpRequest request,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool allowQueryToken,
+        bool allowPathToken = false) =>
+        Authorize(request, settings, managementStore, allowQueryToken, allowPathToken).IsAuthorized;
 
     public static bool TryRemovePathToken(
         PathString path,
@@ -69,7 +103,7 @@ internal static class TokenAuthentication
         TryGetBearerToken(value, out var token)
         && IsTokenAuthorized(token, settings, managementStore, updateApiKeyLastUsed: false);
 
-    public static bool IsTokenAuthorized(
+    private static AuthResult AuthorizeToken(
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
@@ -77,13 +111,31 @@ internal static class TokenAuthentication
     {
         if (string.IsNullOrWhiteSpace(token))
         {
-            return false;
+            return AuthResult.Failure;
         }
 
-        return !string.IsNullOrWhiteSpace(settings.Token)
-            && string.Equals(token, settings.Token, StringComparison.Ordinal)
-            || managementStore.IsApiKeyValid(token, updateApiKeyLastUsed);
+        if (!string.IsNullOrWhiteSpace(settings.Token)
+            && string.Equals(token, settings.Token, StringComparison.Ordinal))
+        {
+            return AuthResult.Success(null);
+        }
+
+        var apiKeyId = managementStore.GetApiKeyId(token);
+        if (apiKeyId is not null)
+        {
+            managementStore.IsApiKeyValid(token, updateApiKeyLastUsed);
+            return AuthResult.Success(apiKeyId);
+        }
+
+        return AuthResult.Failure;
     }
+
+    public static bool IsTokenAuthorized(
+        string? token,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool updateApiKeyLastUsed) =>
+        AuthorizeToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
 
     private static bool TryGetBearerToken(string? authorization, out string token)
     {
@@ -129,5 +181,22 @@ internal static class TokenAuthentication
             ? PathString.Empty
             : new PathString(value[nextSlash..]);
         return true;
+    }
+}
+
+internal sealed class AuthResult
+{
+    public static AuthResult Failure { get; } = new(false, null);
+
+    public static AuthResult Success(string? apiKeyId) => new(true, apiKeyId);
+
+    public bool IsAuthorized { get; }
+
+    public string? ApiKeyId { get; }
+
+    private AuthResult(bool isAuthorized, string? apiKeyId)
+    {
+        IsAuthorized = isAuthorized;
+        ApiKeyId = apiKeyId;
     }
 }

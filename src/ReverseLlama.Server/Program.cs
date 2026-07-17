@@ -74,6 +74,10 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
+var managementStore = app.Services.GetRequiredService<ManagementStore>();
+var tunnelHub = app.Services.GetRequiredService<TunnelHub>();
+managementStore.SetConnectedClientProvider(() => tunnelHub.ClientSnapshots.Select(c => c.Id));
+
 if (settings.Keycloak.IsConfigured)
 {
     app.UseAuthentication();
@@ -81,6 +85,21 @@ if (settings.Keycloak.IsConfigured)
 }
 
 app.UseElmah();
+
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.AccessControlAllowOrigin = "*";
+    context.Response.Headers.AccessControlAllowMethods = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
+    context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Authorization";
+
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        context.Response.StatusCode = StatusCodes.Status204NoContent;
+        return;
+    }
+
+    await next();
+});
 
 app.UseWebSockets(new WebSocketOptions
 {
