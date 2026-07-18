@@ -108,14 +108,7 @@ app.UseWebSockets(new WebSocketOptions
 
 app.MapAdminEndpoints(settings);
 
-app.MapGet("/", (TunnelHub hub) =>
-    Results.Json(new
-    {
-        status = "ok",
-        connected = hub.HasClient,
-        pendingRequests = hub.PendingRequestCount,
-        clients = hub.ClientsSnapshot.Count
-    }));
+app.MapGet("/", () => Results.Redirect("/admin"));
 
 app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSettings serverSettings, EmbeddingCache embeddingCache, ManagementStore managementStore) =>
 {
