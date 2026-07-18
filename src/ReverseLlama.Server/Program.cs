@@ -4,9 +4,13 @@ using ElmahCore;
 using ElmahCore.Mvc;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using ReverseLlama.Protocol;
 using ReverseLlama.Server;
+using ReverseLlama.Server.Data;
+using ReverseLlama.Server.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 var settings = ServerSettings.FromConfiguration(builder.Configuration);
@@ -68,9 +72,47 @@ if (settings.Keycloak.IsConfigured)
                     return Task.CompletedTask;
                 }
             };
-        });
+    });
 }
 
+if (!settings.Keycloak.IsConfigured)
+{
+    var identityDbPath = Path.Combine(AppContext.BaseDirectory, "App_Data", "identity.sqlite");
+    var identityConnectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+    {
+        DataSource = identityDbPath,
+        Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate
+    }.ToString();
+
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseSqlite(identityConnectionString));
+
+    builder.Services
+        .AddIdentity<ApplicationUser, IdentityRole>(options =>
+        {
+            options.Password.RequireDigit = true;
+            options.Password.RequireLowercase = true;
+            options.Password.RequireUppercase = true;
+            options.Password.RequireNonAlphanumeric = false;
+            options.Password.RequiredLength = 8;
+            options.User.RequireUniqueEmail = true;
+            options.SignIn.RequireConfirmedAccount = false;
+        })
+        .AddEntityFrameworkStores<ApplicationDbContext>()
+        .AddDefaultTokenProviders();
+
+    builder.Services.ConfigureApplicationCookie(options =>
+    {
+        options.Cookie.Name = "ReverseLlama.Admin";
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.LoginPath = "/admin/login";
+        options.LogoutPath = "/admin/logout";
+        options.AccessDeniedPath = "/admin/login";
+    });
+}
+
+builder.Services.AddAntiforgery();
 builder.Services.AddAuthorization();
 
 builder.Services.AddCors(options =>
@@ -122,6 +164,18 @@ if (settings.Keycloak.IsConfigured)
     app.UseAuthentication();
     app.UseAuthorization();
 }
+
+if (!settings.Keycloak.IsConfigured)
+{
+    using var scope = app.Services.CreateScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    dbContext.Database.EnsureCreated();
+
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+
+app.UseAntiforgery();
 
 app.UseElmah();
 
