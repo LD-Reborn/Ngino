@@ -73,6 +73,44 @@ if (settings.Keycloak.IsConfigured)
 
 builder.Services.AddAuthorization();
 
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        if (settings.Cors.AllowedOrigins.Contains("*"))
+        {
+            policy.AllowAnyOrigin();
+        }
+        else
+        {
+            policy.WithOrigins(settings.Cors.AllowedOrigins);
+        }
+
+        if (settings.Cors.AllowedMethods.Contains("*"))
+        {
+            policy.AllowAnyMethod();
+        }
+        else
+        {
+            policy.WithMethods(settings.Cors.AllowedMethods);
+        }
+
+        if (settings.Cors.AllowedHeaders.Contains("*"))
+        {
+            policy.AllowAnyHeader();
+        }
+        else
+        {
+            policy.WithHeaders(settings.Cors.AllowedHeaders);
+        }
+
+        if (settings.Cors.AllowCredentials)
+        {
+            policy.AllowCredentials();
+        }
+    });
+});
+
 var app = builder.Build();
 
 var managementStore = app.Services.GetRequiredService<ManagementStore>();
@@ -87,20 +125,12 @@ if (settings.Keycloak.IsConfigured)
 
 app.UseElmah();
 
+app.UseCors();
+
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.AccessControlAllowOrigin = "*";
-    context.Response.Headers.AccessControlAllowMethods = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
-    context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Authorization";
     context.Response.Headers.XFrameOptions = "DENY";
     context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
-
-    if (HttpMethods.IsOptions(context.Request.Method))
-    {
-        context.Response.StatusCode = StatusCodes.Status204NoContent;
-        return;
-    }
-
     await next();
 });
 
