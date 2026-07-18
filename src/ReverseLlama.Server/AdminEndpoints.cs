@@ -41,6 +41,14 @@ internal static class AdminEndpoints
         {
             api.RequireAuthorization();
         }
+        else
+        {
+            api.AddEndpointFilter((context, next) =>
+                new ValueTask<object?>(
+                    Results.Json(
+                        new { error = "No authentication configured - authentication required to use the admin API" },
+                        statusCode: StatusCodes.Status403Forbidden)));
+        }
 
         api.MapGet("/summary", (HttpContext context, TunnelHub hub, ManagementStore store) =>
             Results.Json(BuildSummary(context.User, hub, store, settings)));
