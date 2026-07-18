@@ -142,3 +142,13 @@ The script ensures .NET 10 and Ollama are installed, builds the client self-cont
 - Use HTTPS or a private network/VPN when exposing this outside a trusted network.
 - **Tokens in URLs** (`/token/<token>/...` and `?token=...`) are logged by web servers (Apache, Nginx, Kestrel), reverse proxies, and browsers (history). Malicious MITM proxies can also read them. Prefer header-based auth (`X-Reverse-Llama-Token` or `Authorization: Bearer`) when your client supports it.
 - The token is simple shared-secret protection, not a full access-control system.
+
+## AI Disclosure
+
+This project was architected by humans.
+The code was mostly authored by multiple AI models:
+
+- Claude Fable 5
+- ChatGPT 5.5
+- OpenCode Big Pickle
+- Qwen3-coder-next:latest
