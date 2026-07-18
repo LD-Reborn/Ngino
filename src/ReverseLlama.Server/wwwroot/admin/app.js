@@ -16,6 +16,26 @@ const sidebarMeta = document.getElementById("sidebarMeta");
 document.getElementById("refreshButton").addEventListener("click", () => refresh(true));
 window.addEventListener("hashchange", () => renderRoute());
 
+const morphdomOptions = {
+  childrenOnly: true,
+  onBeforeElUpdated(fromEl, toEl) {
+    if (fromEl.isEqualNode(toEl)) return false;
+    return true;
+  }
+};
+
+function patchContent(html) {
+  const temp = document.createElement("section");
+  temp.innerHTML = html;
+  morphdom(content, temp, morphdomOptions);
+}
+
+function patchSidebar(html) {
+  const temp = document.createElement("div");
+  temp.innerHTML = html;
+  morphdom(sidebarMeta, temp, morphdomOptions);
+}
+
 content.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) {
@@ -263,7 +283,7 @@ async function refresh(showNotice = false, render = true) {
     state.summary = await api("/summary");
     updateShell();
     if (render) {
-      await renderRoute();
+      await renderRoute(false);
     }
 
     if (showNotice) {
@@ -271,7 +291,7 @@ async function refresh(showNotice = false, render = true) {
     }
   } catch (error) {
     setNotice(error.message, true);
-    content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
+    patchContent(`<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`);
   } finally {
     state.loading = false;
   }
@@ -304,7 +324,7 @@ async function api(path, options = {}) {
   return body;
 }
 
-async function renderRoute() {
+async function renderRoute(showLoading = true) {
   const hash = (window.location.hash || "#clients").slice(1);
   const parts = hash.split("/");
   const view = parts[0];
@@ -316,13 +336,13 @@ async function renderRoute() {
 
   if (view === "models" && encodedParam) {
     const model = decodeURIComponent(encodedParam);
-    await loadModelDetail(model);
+    await loadModelDetail(model, undefined, showLoading);
     return;
   }
 
   if (view === "groups" && encodedParam) {
     const groupId = decodeURIComponent(encodedParam);
-    await loadGroupDetail(groupId);
+    await loadGroupDetail(groupId, showLoading);
     return;
   }
 
@@ -345,7 +365,7 @@ async function renderRoute() {
   }
 
   if (view === "usage") {
-    await loadUsage();
+    await loadUsage(showLoading);
     return;
   }
 
@@ -358,13 +378,13 @@ function updateShell() {
     return;
   }
 
-  sidebarMeta.innerHTML = `
+  patchSidebar(`
     <div>${escapeHtml(summary.user?.name || "Signed in")}</div>
     <div>${summary.clients.length} clients</div>
     <div>${summary.models.length} models</div>
     <div>${(summary.groups || []).length} groups</div>
     <div>${formatDate(summary.generatedAtUtc)}</div>
-  `;
+  `);
 }
 
 function renderClients() {
@@ -372,7 +392,7 @@ function renderClients() {
   pageTitle.textContent = "Clients";
   pageSubtitle.textContent = "Connected tunnel clients, request counts, and forwarding controls.";
 
-  content.innerHTML = `
+  patchContent(`
     <div class="panel">
       <div class="panel-header">
         <h2>Clients</h2>
@@ -382,7 +402,7 @@ function renderClients() {
         ${clients.length ? clientsTable(clients) : emptyState("No clients have connected yet.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 function clientsTable(clients) {
@@ -449,7 +469,7 @@ function renderModels() {
   pageTitle.textContent = "Models";
   pageSubtitle.textContent = "Listed and active models, recent request volume, and model operations.";
 
-  content.innerHTML = `
+  patchContent(`
     <div class="panel">
       <div class="panel-header">
         <h2>Run model action</h2>
@@ -467,7 +487,7 @@ function renderModels() {
         ${models.length ? modelsTable(models) : emptyState("No models have been reported yet.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 function modelActionForm(clients, selectedModel = "", selectedClient = "") {
@@ -537,10 +557,12 @@ function modelsTable(models) {
   `;
 }
 
-async function loadModelDetail(model, clientId) {
+async function loadModelDetail(model, clientId, showLoading = true) {
   pageTitle.textContent = "Model Detail";
   pageSubtitle.textContent = model;
-  content.innerHTML = `<div class="panel"><div class="empty">Loading model detail...</div></div>`;
+  if (showLoading) {
+    patchContent(`<div class="panel"><div class="empty">Loading model detail...</div></div>`);
+  }
 
   const query = new URLSearchParams({ model });
   if (clientId) {
@@ -562,7 +584,7 @@ function renderModelDetail() {
   pageTitle.textContent = "Model Detail";
   pageSubtitle.textContent = model;
 
-  content.innerHTML = `
+  patchContent(`
     <div class="toolbar">
       <a class="button secondary" href="#models">Back to models</a>
     </div>
@@ -618,7 +640,7 @@ function renderModelDetail() {
         ${detail.show ? `<pre class="pre">${escapeHtml(formatJson(showBody))}</pre>` : emptyState("No connected client was available for details.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 async function runModelCommand(clientId, model, action) {
@@ -664,7 +686,7 @@ function renderApiKeys() {
   pageTitle.textContent = "API Keys";
   pageSubtitle.textContent = "Keys accepted by the proxy token header, bearer auth, query token, and token path.";
 
-  content.innerHTML = `
+  patchContent(`
     ${state.newKey ? newKeyPanel(state.newKey) : ""}
     <div class="panel">
       <div class="panel-header">
@@ -689,7 +711,7 @@ function renderApiKeys() {
         ${keys.length ? apiKeysTable(keys) : emptyState("No API keys have been created.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 function newKeyPanel(key) {
@@ -739,7 +761,7 @@ function renderGroups() {
   pageTitle.textContent = "Groups";
   pageSubtitle.textContent = "Manage access groups that control which clients and models API keys can reach.";
 
-  content.innerHTML = `
+  patchContent(`
     <div class="panel">
       <div class="panel-header">
         <h2>Create group</h2>
@@ -763,7 +785,7 @@ function renderGroups() {
         ${groups.length ? groupsTable(groups) : emptyState("No groups have been created.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 function groupsTable(groups) {
@@ -796,10 +818,12 @@ function groupsTable(groups) {
   `;
 }
 
-async function loadGroupDetail(groupId) {
+async function loadGroupDetail(groupId, showLoading = true) {
   pageTitle.textContent = "Group Detail";
   pageSubtitle.textContent = groupId;
-  content.innerHTML = `<div class="panel"><div class="empty">Loading group...</div></div>`;
+  if (showLoading) {
+    patchContent(`<div class="panel"><div class="empty">Loading group...</div></div>`);
+  }
 
   try {
     const [group, clients, apiKeyGroups, billing, rules, payments, balance] = await Promise.all([
@@ -815,7 +839,7 @@ async function loadGroupDetail(groupId) {
     state.groupDetail = { group, clients, apiKeyGroups, billing, rules, payments, balance };
     renderGroupDetail();
   } catch (error) {
-    content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
+    patchContent(`<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`);
   }
 }
 
@@ -831,7 +855,7 @@ function renderGroupDetail() {
   pageTitle.textContent = "Group Detail";
   pageSubtitle.textContent = group.name;
 
-  content.innerHTML = `
+  patchContent(`
     <div class="toolbar">
       <a class="button secondary" href="#groups">Back to groups</a>
     </div>
@@ -979,7 +1003,7 @@ function renderGroupDetail() {
         </form>
       </div>
     </div>
-  `;
+  `);
 }
 
 function groupClientsTable(clients, groupId) {
@@ -1143,10 +1167,12 @@ function formatCurrency(value, currency) {
   return formatted;
 }
 
-async function loadUsage() {
+async function loadUsage(showLoading = true) {
   pageTitle.textContent = "Usage";
   pageSubtitle.textContent = "Token usage and revenue statistics.";
-  content.innerHTML = `<div class="panel"><div class="empty">Loading usage data...</div></div>`;
+  if (showLoading) {
+    patchContent(`<div class="panel"><div class="empty">Loading usage data...</div></div>`);
+  }
 
   try {
     const [usage, revenue] = await Promise.all([
@@ -1157,7 +1183,7 @@ async function loadUsage() {
     state.usageData = { usage, revenue };
     renderUsage();
   } catch (error) {
-    content.innerHTML = `<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`;
+    patchContent(`<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`);
   }
 }
 
@@ -1179,7 +1205,7 @@ function renderUsage() {
     revenueMap[r.clientId] = r;
   }
 
-  content.innerHTML = `
+  patchContent(`
     <div class="panel">
       <div class="panel-header">
         <h2>Tokens by model</h2>
@@ -1216,7 +1242,7 @@ function renderUsage() {
         ${byGroup.length ? tokenStatsGroupTable(byGroup) : emptyState("No token data yet.")}
       </div>
     </div>
-  `;
+  `);
 }
 
 function tokenStatsModelTable(stats) {
@@ -1362,11 +1388,11 @@ async function refreshAfterModelCommand(model, clientId) {
 
   const hash = window.location.hash || "";
   if (hash.startsWith(`#models/${encodeURIComponent(model)}`)) {
-    await loadModelDetail(model, clientId);
+    await loadModelDetail(model, clientId, false);
     return;
   }
 
-  await renderRoute();
+  await renderRoute(false);
 }
 
 function modelActionResultDetail(result) {
