@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using ReverseLlama.Protocol;
 
 namespace ReverseLlama.Server;
@@ -115,7 +117,9 @@ internal static class TokenAuthentication
         }
 
         if (!string.IsNullOrWhiteSpace(settings.Token)
-            && string.Equals(token, settings.Token, StringComparison.Ordinal))
+            && CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(Encoding.UTF8.GetBytes(token)),
+                SHA256.HashData(Encoding.UTF8.GetBytes(settings.Token))))
         {
             return AuthResult.Success(null);
         }
