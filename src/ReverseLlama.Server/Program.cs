@@ -155,6 +155,16 @@ app.Use(async (context, next) =>
             {
                 rateLimiter.RecordFailure(ip, context.Request.Path);
             }
+            else if (location is not null
+                && location.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+            {
+                rateLimiter.RecordSuccess(ip);
+            }
+        }
+        else if (context.Response.StatusCode is >= 200 and < 300
+            && context.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            rateLimiter.RecordSuccess(ip);
         }
 
         return Task.CompletedTask;

@@ -1,15 +1,20 @@
 using System.Collections.Concurrent;
+using ElmahCore;
 
 namespace ReverseLlama.Server;
 
 internal sealed class AuthRateLimiter
 {
+    private const int DecayIntervalMinutes = 144; // ~1 step per 2.4 hours
+
     private readonly ConcurrentDictionary<string, AuthAttemptInfo> _attempts = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<AuthRateLimiter> _logger;
+    private readonly ErrorLog _errorLog;
 
-    public AuthRateLimiter(ILogger<AuthRateLimiter> logger)
+    public AuthRateLimiter(ILogger<AuthRateLimiter> logger, ErrorLog errorLog)
     {
         _logger = logger;
+        _errorLog = errorLog;
     }
 
     public void RecordFailure(string ipAddress, string endpoint)
@@ -34,6 +39,27 @@ internal sealed class AuthRateLimiter
                     "Failed auth attempt #{Count} from {IpAddress} on {Endpoint}",
                     info.Count, ipAddress, endpoint);
             }
+
+            _errorLog.Log(new Error(new AuthFailureException(ipAddress, endpoint, info.Count)));
+        }
+    }
+
+    public void RecordSuccess(string ipAddress)
+    {
+        if (!_attempts.TryGetValue(ipAddress, out var info))
+            return;
+
+        lock (info)
+        {
+            if (info.Count > 0)
+            {
+                var before = info.Count;
+                info.Count /= 2;
+                info.LastAttemptUtc = DateTime.UtcNow;
+                _logger.LogInformation(
+                    "Auth success from {IpAddress}: count reduced from {Before} to {After}",
+                    ipAddress, before, info.Count);
+            }
         }
     }
 
@@ -57,6 +83,16 @@ internal sealed class AuthRateLimiter
                 info.BlockedUntilUtc = null;
                 info.LastAttemptUtc = DateTime.MinValue;
                 return (true, null, false);
+            }
+
+            if (info.Count > 0)
+            {
+                var elapsed = DateTime.UtcNow - info.LastAttemptUtc;
+                var decayTicks = (int)(elapsed.TotalMinutes / DecayIntervalMinutes);
+                if (decayTicks > 0)
+                {
+                    info.Count = Math.Max(0, info.Count - decayTicks);
+                }
             }
 
             var waitTime = CalculateWaitTime(info.Count);
@@ -113,4 +149,7 @@ internal sealed class AuthRateLimiter
         public DateTime LastAttemptUtc;
         public DateTime? BlockedUntilUtc;
     }
+
+    private sealed class AuthFailureException(string ipAddress, string endpoint, int attemptCount)
+        : Exception($"Failed auth attempt #{attemptCount} from {ipAddress} on {endpoint}");
 }
