@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using ReverseLlama.Protocol;
 
 namespace ReverseLlama.Server;
@@ -45,6 +47,9 @@ internal static class TokenAuthentication
             }
         }
 
+        // Path-token auth: useful for clients that cannot send headers.
+        // SECURITY: the token appears in the URL and will be logged by
+        // web servers, proxies, and browsers. Prefer header auth when possible.
         if (allowPathToken
             && TryGetPathToken(request.Path, out var pathToken, out _))
         {
@@ -55,6 +60,9 @@ internal static class TokenAuthentication
             }
         }
 
+        // Query-string auth: needed for clients that cannot send headers
+        // (e.g. browser address bar, status page).
+        // SECURITY: same URL-logging risks as path-token auth above.
         if (allowQueryToken
             && request.Query.TryGetValue("token", out var queryValues))
         {
@@ -115,7 +123,9 @@ internal static class TokenAuthentication
         }
 
         if (!string.IsNullOrWhiteSpace(settings.Token)
-            && string.Equals(token, settings.Token, StringComparison.Ordinal))
+            && CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(Encoding.UTF8.GetBytes(token)),
+                SHA256.HashData(Encoding.UTF8.GetBytes(settings.Token))))
         {
             return AuthResult.Success(null);
         }
