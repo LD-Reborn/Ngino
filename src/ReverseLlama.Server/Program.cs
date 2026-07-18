@@ -92,6 +92,8 @@ app.Use(async (context, next) =>
     context.Response.Headers.AccessControlAllowOrigin = "*";
     context.Response.Headers.AccessControlAllowMethods = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
     context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Authorization";
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
 
     if (HttpMethods.IsOptions(context.Request.Method))
     {
