@@ -198,15 +198,11 @@ app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSetti
         embeddingCache = new
         {
             available = embeddingCache.IsAvailable,
-            count = embeddingCache.Count,
-            databasePath = embeddingCache.DatabasePath,
-            lastError = embeddingCache.LastError
+            count = embeddingCache.Count
         },
         management = new
         {
-            available = managementStore.IsAvailable,
-            databasePath = managementStore.DatabasePath,
-            lastError = managementStore.LastError
+            available = managementStore.IsAvailable
         },
         clients = hub.ClientsSnapshot
     });

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ElmahCore;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Primitives;
 using ReverseLlama.Protocol;
@@ -569,10 +570,16 @@ internal static class ReverseProxyEndpoint
         {
             logger.LogWarning(exception, "Proxy request {RequestId} failed.", requestId);
 
+            var errorLog = context.RequestServices.GetService<ErrorLog>();
+            if (errorLog is not null)
+            {
+                await errorLog.LogAsync(new Error(exception, context));
+            }
+
             if (!context.Response.HasStarted)
             {
                 context.Response.StatusCode = StatusCodes.Status502BadGateway;
-                await context.Response.WriteAsync(exception.Message, CancellationToken.None);
+                await context.Response.WriteAsync("Bad gateway", CancellationToken.None);
             }
             else
             {
