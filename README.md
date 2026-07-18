@@ -136,4 +136,9 @@ The script ensures .NET 10 and Ollama are installed, builds the client self-cont
 ## Notes
 
 - Request and response bodies are streamed through the tunnel, which is important for Ollama streaming responses.
-- Use HTTPS or a private network/VPN when exposing this outside a trusted network. The token is simple shared-secret protection, not a full access-control system.
+
+## Security notes
+
+- Use HTTPS or a private network/VPN when exposing this outside a trusted network.
+- **Tokens in URLs** (`/token/<token>/...` and `?token=...`) are logged by web servers (Apache, Nginx, Kestrel), reverse proxies, and browsers (history). Malicious MITM proxies can also read them. Prefer header-based auth (`X-Reverse-Llama-Token` or `Authorization: Bearer`) when your client supports it.
+- The token is simple shared-secret protection, not a full access-control system.

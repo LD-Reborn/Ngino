@@ -15,6 +15,7 @@ builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<TunnelHub>();
 builder.Services.AddSingleton<EmbeddingCache>();
 builder.Services.AddSingleton<ManagementStore>();
+builder.Services.AddSingleton<AuthRateLimiter>();
 builder.Services.AddElmah<ElmahCore.MySql.MySqlErrorLog>().Configure<ElmahOptions>(
     options => options.ConnectionString = builder.Configuration.GetConnectionString("ElmahConnection"));
 
@@ -30,7 +31,7 @@ if (settings.Keycloak.IsConfigured)
         {
             options.Cookie.Name = "ReverseLlama.Admin";
             options.Cookie.SameSite = SameSiteMode.Lax;
-            options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
             options.LoginPath = "/admin/login";
             options.LogoutPath = "/admin/logout";
         })
@@ -45,9 +46,9 @@ if (settings.Keycloak.IsConfigured)
             options.SaveTokens = true;
             options.GetClaimsFromUserInfoEndpoint = true;
             options.CorrelationCookie.SameSite = SameSiteMode.Lax;
-            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.NonceCookie.SameSite = SameSiteMode.Lax;
-            options.NonceCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.Scope.Clear();
             options.Scope.Add("openid");
             options.Scope.Add("profile");
@@ -91,12 +92,85 @@ app.Use(async (context, next) =>
     context.Response.Headers.AccessControlAllowOrigin = "*";
     context.Response.Headers.AccessControlAllowMethods = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
     context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Authorization";
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers.ContentSecurityPolicy = "frame-ancestors 'none'";
 
     if (HttpMethods.IsOptions(context.Request.Method))
     {
         context.Response.StatusCode = StatusCodes.Status204NoContent;
         return;
     }
+
+    await next();
+});
+
+var rateLimiter = app.Services.GetRequiredService<AuthRateLimiter>();
+
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        await next();
+        return;
+    }
+
+    var ip = AuthRateLimiter.GetClientIp(context.Request);
+    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip);
+
+    if (!allowed)
+    {
+        context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.Response.Headers.RetryAfter = ((int)retryAfter!.Value.TotalSeconds).ToString();
+        context.Response.ContentType = "application/json";
+        var seconds = (int)retryAfter!.Value.TotalSeconds;
+        string retryMessage;
+        if (seconds >= 3600)
+        {
+            var hours = seconds / 3600;
+            retryMessage = $"Please try again in {hours} hour{(hours == 1 ? "" : "s")}.";
+        }
+        else if (seconds >= 60)
+        {
+            var minutes = seconds / 60;
+            retryMessage = $"Please try again in {minutes} minute{(minutes == 1 ? "" : "s")}.";
+        }
+        else
+        {
+            retryMessage = $"Please try again in {seconds} second{(seconds == 1 ? "" : "s")}.";
+        }
+        await context.Response.WriteAsJsonAsync(new { error = $"Too many requests. {retryMessage}" }, context.RequestAborted);
+        return;
+    }
+
+    context.Response.OnStarting(() =>
+    {
+        if (context.Response.StatusCode is StatusCodes.Status401Unauthorized)
+        {
+            rateLimiter.RecordFailure(ip, context.Request.Path);
+        }
+        else if (context.Response.StatusCode is StatusCodes.Status302Found
+            && context.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            var location = context.Response.Headers.Location.FirstOrDefault();
+            if (location is not null
+                && location.Contains("/admin/login", StringComparison.OrdinalIgnoreCase))
+            {
+                rateLimiter.RecordFailure(ip, context.Request.Path);
+            }
+            else if (location is not null
+                && location.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+            {
+                rateLimiter.RecordSuccess(ip);
+            }
+        }
+        else if (context.Response.StatusCode is >= 200 and < 300
+            && context.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            rateLimiter.RecordSuccess(ip);
+        }
+
+        return Task.CompletedTask;
+    });
 
     await next();
 });
@@ -126,15 +200,11 @@ app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSetti
         embeddingCache = new
         {
             available = embeddingCache.IsAvailable,
-            count = embeddingCache.Count,
-            databasePath = embeddingCache.DatabasePath,
-            lastError = embeddingCache.LastError
+            count = embeddingCache.Count
         },
         management = new
         {
-            available = managementStore.IsAvailable,
-            databasePath = managementStore.DatabasePath,
-            lastError = managementStore.LastError
+            available = managementStore.IsAvailable
         },
         clients = hub.ClientsSnapshot
     });

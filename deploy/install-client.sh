@@ -262,6 +262,13 @@ chmod +x "$INSTALL_DIR/ReverseLlama.Client"
 
 info "Client installed to $INSTALL_DIR."
 
+# ── Write environment file (avoids shell injection in unit file) ─────────────
+ENV_DIR="/etc/reversellama-client"
+mkdir -p "$ENV_DIR"
+printf 'REVERSE_LLAMA_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/env"
+chmod 600 "$ENV_DIR/env"
+info "Environment file written to $ENV_DIR/env (mode 0600)."
+
 # ── Create systemd service ───────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -280,11 +287,12 @@ $([ "$SKIP_OLLAMA" = "false" ] && echo "Wants=ollama.service")
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/ReverseLlama.Client --server "$SERVER_URL" --upstream "$UPSTREAM" --token "$TOKEN" --client-id "$CLIENT_ID"
+ExecStart=$INSTALL_DIR/ReverseLlama.Client --server "$SERVER_URL" --upstream "$UPSTREAM" --client-id "$CLIENT_ID"
 Restart=always
 RestartSec=5
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
 Environment=DOTNET_NOLOGO=1
+EnvironmentFile=$ENV_DIR/env
 WorkingDirectory=$INSTALL_DIR
 
 [Install]
