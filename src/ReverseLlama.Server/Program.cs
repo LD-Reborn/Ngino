@@ -31,7 +31,7 @@ if (settings.Keycloak.IsConfigured)
         {
             options.Cookie.Name = "ReverseLlama.Admin";
             options.Cookie.SameSite = SameSiteMode.Lax;
-            options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
             options.LoginPath = "/admin/login";
             options.LogoutPath = "/admin/logout";
         })
@@ -46,9 +46,9 @@ if (settings.Keycloak.IsConfigured)
             options.SaveTokens = true;
             options.GetClaimsFromUserInfoEndpoint = true;
             options.CorrelationCookie.SameSite = SameSiteMode.Lax;
-            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.NonceCookie.SameSite = SameSiteMode.Lax;
-            options.NonceCookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
             options.Scope.Clear();
             options.Scope.Add("openid");
             options.Scope.Add("profile");
