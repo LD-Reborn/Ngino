@@ -19,6 +19,8 @@ internal sealed class ServerSettings
 
     public KeycloakSettings Keycloak { get; init; } = new();
 
+    public CorsSettings Cors { get; init; } = new();
+
     public static ServerSettings FromConfiguration(IConfiguration configuration)
     {
         return new ServerSettings
@@ -47,6 +49,13 @@ internal sealed class ServerSettings
                     true,
                     "Authentication:Keycloak:RequireHttpsMetadata",
                     "REVERSE_LLAMA_KEYCLOAK_REQUIRE_HTTPS_METADATA")
+            },
+            Cors = new CorsSettings
+            {
+                AllowedOrigins = ReadStringArray(configuration, ["CORS:AllowedOrigins"]),
+                AllowedMethods = ReadStringArray(configuration, ["CORS:AllowedMethods"]),
+                AllowedHeaders = ReadStringArray(configuration, ["CORS:AllowedHeaders"]),
+                AllowCredentials = ReadBool(configuration, false, "CORS:AllowCredentials")
             }
         };
     }
@@ -77,8 +86,30 @@ internal sealed class ServerSettings
         return bool.TryParse(value, out var parsed) ? parsed : fallback;
     }
 
+    private static string[] ReadStringArray(IConfiguration configuration, params string[] keys)
+    {
+        var value = Read(configuration, keys);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return [];
+        }
+
+        return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
     private static string NormalizePath(string path) =>
         path.StartsWith('/') ? path : $"/{path}";
+}
+
+internal sealed class CorsSettings
+{
+    public string[] AllowedOrigins { get; init; } = ["*"];
+
+    public string[] AllowedMethods { get; init; } = ["*"];
+
+    public string[] AllowedHeaders { get; init; } = ["*"];
+
+    public bool AllowCredentials { get; init; }
 }
 
 internal sealed class KeycloakSettings
