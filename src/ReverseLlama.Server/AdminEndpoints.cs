@@ -1,10 +1,16 @@
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
+using Microsoft.EntityFrameworkCore;
+using ReverseLlama.Server.Data;
+using ReverseLlama.Server.Models;
 
 namespace ReverseLlama.Server;
 
@@ -28,6 +34,99 @@ internal static class AdminEndpoints
                     [CookieAuthenticationDefaults.AuthenticationScheme, OpenIdConnectDefaults.AuthenticationScheme]))
                 .RequireAuthorization();
         }
+        else
+        {
+            app.MapGet("/admin/login", async (HttpContext context, SignInManager<ApplicationUser> signInManager, IAntiforgery antiforgery, string? returnUrl) =>
+            {
+                if (context.User.Identity?.IsAuthenticated == true)
+                    return Results.Redirect(NormalizeLocalReturnUrl(returnUrl));
+
+                if (await signInManager.UserManager.Users.AnyAsync())
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(LoginPage(NormalizeLocalReturnUrl(returnUrl), null, tokens.RequestToken!), "text/html");
+                }
+
+                return Results.Redirect("/admin/setup");
+            }).AllowAnonymous();
+
+            app.MapPost("/admin/login", async (HttpContext context, SignInManager<ApplicationUser> signInManager, IAntiforgery antiforgery, string? returnUrl, [FromForm] string? username, [FromForm] string? password) =>
+            {
+                if (await signInManager.UserManager.Users.AnyAsync() == false)
+                    return Results.Redirect("/admin/setup");
+
+                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(LoginPage(NormalizeLocalReturnUrl(returnUrl), "Username and password are required.", tokens.RequestToken!), "text/html");
+                }
+
+                var result = await signInManager.PasswordSignInAsync(username, password, true, true);
+                if (result.Succeeded)
+                    return Results.Redirect(NormalizeLocalReturnUrl(returnUrl));
+
+                if (result.IsLockedOut)
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(LoginPage(NormalizeLocalReturnUrl(returnUrl), "Account is locked out.", tokens.RequestToken!), "text/html");
+                }
+
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(LoginPage(NormalizeLocalReturnUrl(returnUrl), "Invalid username or password.", tokens.RequestToken!), "text/html");
+                }
+            }).AllowAnonymous();
+
+            app.MapGet("/admin/setup", async (HttpContext context, SignInManager<ApplicationUser> signInManager, IAntiforgery antiforgery) =>
+            {
+                if (context.User.Identity?.IsAuthenticated == true)
+                    return Results.Redirect("/admin");
+
+                if (await signInManager.UserManager.Users.AnyAsync())
+                    return Results.Redirect("/admin/login");
+
+                var tokens = antiforgery.GetAndStoreTokens(context);
+                return Results.Content(SetupPage(null, tokens.RequestToken!), "text/html");
+            }).AllowAnonymous();
+
+            app.MapPost("/admin/setup", async (HttpContext context, SignInManager<ApplicationUser> signInManager, IAntiforgery antiforgery, [FromForm] string? username, [FromForm] string? email, [FromForm] string? password, [FromForm] string? confirmPassword) =>
+            {
+                if (await signInManager.UserManager.Users.AnyAsync())
+                    return Results.Redirect("/admin/login");
+
+                if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(SetupPage("Username and password are required.", tokens.RequestToken!), "text/html");
+                }
+
+                if (password != confirmPassword)
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(SetupPage("Passwords do not match.", tokens.RequestToken!), "text/html");
+                }
+
+                var user = new ApplicationUser { UserName = username, Email = email };
+                var result = await signInManager.UserManager.CreateAsync(user, password);
+                if (result.Succeeded)
+                {
+                    await signInManager.SignInAsync(user, true);
+                    return Results.Redirect("/admin");
+                }
+
+                var errors = string.Join(" ", result.Errors.Select(e => e.Description));
+                {
+                    var tokens = antiforgery.GetAndStoreTokens(context);
+                    return Results.Content(SetupPage(errors, tokens.RequestToken!), "text/html");
+                }
+            }).AllowAnonymous();
+
+            app.MapPost("/admin/logout", async (SignInManager<ApplicationUser> signInManager) =>
+            {
+                await signInManager.SignOutAsync();
+                return Results.Redirect("/admin/login");
+            }).RequireAuthorization();
+        }
 
         app.MapGet("/admin/auth-error", () =>
             Results.Text(
@@ -43,11 +142,7 @@ internal static class AdminEndpoints
         }
         else
         {
-            api.AddEndpointFilter((context, next) =>
-                new ValueTask<object?>(
-                    Results.Json(
-                        new { error = "No authentication configured - authentication required to use the admin API" },
-                        statusCode: StatusCodes.Status403Forbidden)));
+            api.RequireAuthorization();
         }
 
         api.MapGet("/summary", (HttpContext context, TunnelHub hub, ManagementStore store) =>
@@ -458,7 +553,34 @@ internal static class AdminEndpoints
             adminHome.RequireAuthorization();
             adminAssets.RequireAuthorization();
         }
+        else
+        {
+            adminHome.RequireAuthorization();
+            adminAssets.RequireAuthorization();
+        }
     }
+
+    private static string LoginPage(string returnUrl, string? error, string? antiforgeryToken)
+    {
+        var errorHtml = string.IsNullOrEmpty(error)
+            ? ""
+            : "<div class=\"error\">" + HtmlEncode(error) + "</div>";
+        var loginAction = "/admin/login" + (returnUrl != "/admin" ? "?returnUrl=" + Uri.EscapeDataString(returnUrl) : "");
+
+        return "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Reverse Llama - Login</title>\n<style>\nbody{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}\n.card{background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:2rem;width:100%;max-width:400px}\nh1{margin:0 0 1.5rem;font-size:1.5rem;text-align:center;color:#e94560}\nlabel{display:block;margin-bottom:.25rem;font-size:.875rem;color:#a0a0b0}\ninput{width:100%;padding:.5rem;border:1px solid #0f3460;border-radius:6px;background:#1a1a2e;color:#e0e0e0;font-size:1rem;margin-bottom:1rem;box-sizing:border-box}\ninput:focus{outline:none;border-color:#e94560}\nbutton{width:100%;padding:.625rem;border:none;border-radius:6px;background:#e94560;color:#fff;font-size:1rem;font-weight:600;cursor:pointer}\nbutton:hover{background:#c73650}\n.error{background:#3d1a1a;border:1px solid #e94560;border-radius:6px;padding:.5rem .75rem;margin-bottom:1rem;font-size:.875rem;color:#ff6b7a}\n</style>\n</head>\n<body>\n<div class=\"card\">\n<h1>Reverse Llama Admin</h1>\n" + errorHtml + "\n<form method=\"post\" action=\"" + HtmlEncode(loginAction) + "\">\n<input type=\"hidden\" name=\"__RequestVerificationToken\" value=\"" + HtmlEncode(antiforgeryToken) + "\">\n<label for=\"username\">Username</label>\n<input type=\"text\" id=\"username\" name=\"username\" autocomplete=\"username\" required autofocus>\n<label for=\"password\">Password</label>\n<input type=\"password\" id=\"password\" name=\"password\" autocomplete=\"current-password\" required>\n<input type=\"hidden\" name=\"returnUrl\" value=\"" + HtmlEncode(returnUrl) + "\">\n<button type=\"submit\">Sign In</button>\n</form>\n</div>\n</body>\n</html>";
+    }
+
+    private static string SetupPage(string? error, string? antiforgeryToken)
+    {
+        var errorHtml = string.IsNullOrEmpty(error)
+            ? ""
+            : "<div class=\"error\">" + HtmlEncode(error) + "</div>";
+
+        return "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>Reverse Llama - Initial Setup</title>\n<style>\nbody{font-family:system-ui,sans-serif;background:#1a1a2e;color:#e0e0e0;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}\n.card{background:#16213e;border:1px solid #0f3460;border-radius:12px;padding:2rem;width:100%;max-width:400px}\nh1{margin:0 0 .25rem;font-size:1.5rem;text-align:center;color:#e94560}\n.subtitle{text-align:center;color:#a0a0b0;margin-bottom:1.5rem;font-size:.875rem}\nlabel{display:block;margin-bottom:.25rem;font-size:.875rem;color:#a0a0b0}\ninput{width:100%;padding:.5rem;border:1px solid #0f3460;border-radius:6px;background:#1a1a2e;color:#e0e0e0;font-size:1rem;margin-bottom:1rem;box-sizing:border-box}\ninput:focus{outline:none;border-color:#e94560}\nbutton{width:100%;padding:.625rem;border:none;border-radius:6px;background:#e94560;color:#fff;font-size:1rem;font-weight:600;cursor:pointer}\nbutton:hover{background:#c73650}\n.error{background:#3d1a1a;border:1px solid #e94560;border-radius:6px;padding:.5rem .75rem;margin-bottom:1rem;font-size:.875rem;color:#ff6b7a}\n</style>\n</head>\n<body>\n<div class=\"card\">\n<h1>Reverse Llama</h1>\n<p class=\"subtitle\">Initial Setup - Create Admin Account</p>\n" + errorHtml + "\n<form method=\"post\" action=\"/admin/setup\" id=\"setupForm\">\n<input type=\"hidden\" name=\"__RequestVerificationToken\" value=\"" + HtmlEncode(antiforgeryToken) + "\">\n<label for=\"username\">Username</label>\n<input type=\"text\" id=\"username\" name=\"username\" autocomplete=\"username\" required autofocus>\n<label for=\"email\">Email (optional)</label>\n<input type=\"email\" id=\"email\" name=\"email\" autocomplete=\"email\">\n<label for=\"password\">Password</label>\n<input type=\"password\" id=\"password\" name=\"password\" autocomplete=\"new-password\" required>\n<label for=\"confirmPassword\">Confirm Password</label>\n<input type=\"password\" id=\"confirmPassword\" name=\"confirmPassword\" autocomplete=\"new-password\" required>\n<button type=\"submit\">Create Account</button>\n</form>\n</div>\n<script>\ndocument.getElementById('setupForm').addEventListener('submit',function(e){\nvar p=document.getElementById('password').value;\nvar c=document.getElementById('confirmPassword').value;\nvar msg=[];\nif(p.length<8)msg.push('at least 8 characters');\nif(!/[a-z]/.test(p))msg.push('a lowercase letter');\nif(!/[A-Z]/.test(p))msg.push('an uppercase letter');\nif(!/[0-9]/.test(p))msg.push('a digit');\nif(p!==c)msg.push('passwords must match');\nif(msg.length){e.preventDefault();var d=document.querySelector('.error');if(!d){d=document.createElement('div');d.className='error';document.getElementById('setupForm').parentNode.insertBefore(d,document.getElementById('setupForm'));}d.textContent='Password needs: '+msg.join(', ')+'.';}});\n</script>\n</body>\n</html>";
+    }
+
+    private static string? HtmlEncode(string? value) =>
+        string.IsNullOrEmpty(value) ? null : System.Net.WebUtility.HtmlEncode(value);
 
     private static object BuildSummary(
         ClaimsPrincipal user,
