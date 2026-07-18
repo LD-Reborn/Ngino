@@ -15,6 +15,7 @@ builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton<TunnelHub>();
 builder.Services.AddSingleton<EmbeddingCache>();
 builder.Services.AddSingleton<ManagementStore>();
+builder.Services.AddSingleton<AuthRateLimiter>();
 builder.Services.AddElmah<ElmahCore.MySql.MySqlErrorLog>().Configure<ElmahOptions>(
     options => options.ConnectionString = builder.Configuration.GetConnectionString("ElmahConnection"));
 
@@ -97,6 +98,67 @@ app.Use(async (context, next) =>
         context.Response.StatusCode = StatusCodes.Status204NoContent;
         return;
     }
+
+    await next();
+});
+
+var rateLimiter = app.Services.GetRequiredService<AuthRateLimiter>();
+
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsOptions(context.Request.Method))
+    {
+        await next();
+        return;
+    }
+
+    var ip = AuthRateLimiter.GetClientIp(context.Request);
+    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip);
+
+    if (!allowed)
+    {
+        context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        context.Response.Headers.RetryAfter = ((int)retryAfter!.Value.TotalSeconds).ToString();
+        context.Response.ContentType = "application/json";
+        var seconds = (int)retryAfter!.Value.TotalSeconds;
+        string retryMessage;
+        if (seconds >= 3600)
+        {
+            var hours = seconds / 3600;
+            retryMessage = $"Please try again in {hours} hour{(hours == 1 ? "" : "s")}.";
+        }
+        else if (seconds >= 60)
+        {
+            var minutes = seconds / 60;
+            retryMessage = $"Please try again in {minutes} minute{(minutes == 1 ? "" : "s")}.";
+        }
+        else
+        {
+            retryMessage = $"Please try again in {seconds} second{(seconds == 1 ? "" : "s")}.";
+        }
+        await context.Response.WriteAsJsonAsync(new { error = $"Too many requests. {retryMessage}" }, context.RequestAborted);
+        return;
+    }
+
+    context.Response.OnStarting(() =>
+    {
+        if (context.Response.StatusCode is StatusCodes.Status401Unauthorized)
+        {
+            rateLimiter.RecordFailure(ip, context.Request.Path);
+        }
+        else if (context.Response.StatusCode is StatusCodes.Status302Found
+            && context.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            var location = context.Response.Headers.Location.FirstOrDefault();
+            if (location is not null
+                && location.Contains("/admin/login", StringComparison.OrdinalIgnoreCase))
+            {
+                rateLimiter.RecordFailure(ip, context.Request.Path);
+            }
+        }
+
+        return Task.CompletedTask;
+    });
 
     await next();
 });
