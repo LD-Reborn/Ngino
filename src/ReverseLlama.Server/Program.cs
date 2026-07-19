@@ -296,7 +296,7 @@ app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSetti
 
 app.Map(settings.TunnelPath, async (HttpContext context, TunnelHub hub, ServerSettings serverSettings, ManagementStore managementStore) =>
 {
-    if (!TokenAuthentication.IsAuthorized(context.Request, serverSettings, managementStore, allowQueryToken: true))
+    if (!TokenAuthentication.IsClientAuthorized(context.Request, serverSettings, managementStore, allowQueryToken: true))
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await context.Response.WriteAsync($"Missing or invalid {ProtocolConstants.TokenHeader}.", context.RequestAborted);

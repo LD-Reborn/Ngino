@@ -3,6 +3,7 @@ const state = {
   detail: null,
   groupDetail: null,
   newKey: null,
+  newClientKey: null,
   loading: false,
   usageData: null
 };
@@ -82,6 +83,16 @@ content.addEventListener("click", async (event) => {
 
       await api(`/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
       setNotice("API key deleted.");
+      await refresh();
+    }
+
+    if (action === "delete-client-key") {
+      if (!confirm("Delete this client key?")) {
+        return;
+      }
+
+      await api(`/client-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
+      setNotice("Client key deleted.");
       await refresh();
     }
 
@@ -171,6 +182,15 @@ content.addEventListener("submit", async (event) => {
         body: { name: data.name }
       });
       setNotice("API key created.");
+      await refresh();
+    }
+
+    if (form.dataset.form === "client-key") {
+      state.newClientKey = await api("/client-keys", {
+        method: "POST",
+        body: { name: data.name }
+      });
+      setNotice("Client key created.");
       await refresh();
     }
 
@@ -359,6 +379,11 @@ async function renderRoute(showLoading = true) {
     return;
   }
 
+  if (view === "client-keys") {
+    renderClientKeys();
+    return;
+  }
+
   if (view === "groups") {
     renderGroups();
     return;
@@ -382,6 +407,8 @@ function updateShell() {
     <div>${escapeHtml(summary.user?.name || "Signed in")}</div>
     <div>${summary.clients.length} clients</div>
     <div>${summary.models.length} models</div>
+    <div>${(summary.clientKeys || []).length} client keys</div>
+    <div>${(summary.apiKeys || []).length} API keys</div>
     <div>${(summary.groups || []).length} groups</div>
     <div>${formatDate(summary.generatedAtUtc)}</div>
   `);
@@ -714,6 +741,39 @@ function renderApiKeys() {
   `);
 }
 
+function renderClientKeys() {
+  const keys = state.summary?.clientKeys || [];
+  pageTitle.textContent = "Client Keys";
+  pageSubtitle.textContent = "Keys accepted by GPU clients to establish tunnel connections.";
+
+  patchContent(`
+    ${state.newClientKey ? newKeyPanel(state.newClientKey) : ""}
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Create client key</h2>
+      </div>
+      <div class="panel-body">
+        <form class="form-row" data-form="client-key">
+          <div class="field">
+            <label for="clientKeyName">Name</label>
+            <input class="input" id="clientKeyName" name="name" placeholder="e.g. gpu_workstation_1" required>
+          </div>
+          <button class="button" type="submit">Create</button>
+        </form>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Client keys</h2>
+        <span class="badge">${keys.length} total</span>
+      </div>
+      <div class="table-wrap">
+        ${keys.length ? clientKeysTable(keys) : emptyState("No client keys have been created.")}
+      </div>
+    </div>
+  `);
+}
+
 function newKeyPanel(key) {
   return `
     <div class="new-key">
@@ -737,6 +797,36 @@ function apiKeysTable(keys) {
       <td>${key.lastUsedUtc ? formatDate(key.lastUsedUtc) : "Never"}</td>
       <td>
         <button class="button danger" data-action="delete-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
+      </td>
+    </tr>
+  `).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Created</th>
+          <th>Last used</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+function clientKeysTable(keys) {
+  const rows = keys.map((key) => `
+    <tr>
+      <td>
+        <div class="cell-main">${escapeHtml(key.name)}</div>
+        <div class="cell-sub">${escapeHtml(key.keyPrefix)}...</div>
+      </td>
+      <td>${formatDate(key.createdAtUtc)}</td>
+      <td>${key.lastUsedUtc ? formatDate(key.lastUsedUtc) : "Never"}</td>
+      <td>
+        <button class="button danger" data-action="delete-client-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
       </td>
     </tr>
   `).join("");

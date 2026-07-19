@@ -11,6 +11,8 @@ internal sealed class ServerSettings
 
     public string? Token { get; init; }
 
+    public string? ClientToken { get; init; }
+
     public int ChunkSize { get; init; } = 64 * 1024;
 
     public string? EmbeddingCachePath { get; init; }
@@ -28,6 +30,7 @@ internal sealed class ServerSettings
             StatusPath = NormalizePath(Read(configuration, "ReverseLlama:StatusPath", "status-path") ?? ProtocolConstants.DefaultStatusPath),
             TunnelPath = NormalizePath(Read(configuration, "ReverseLlama:TunnelPath", "tunnel-path") ?? ProtocolConstants.DefaultTunnelPath),
             Token = Read(configuration, "ReverseLlama:Token", "token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_TOKEN"),
+            ClientToken = Read(configuration, "ReverseLlama:ClientToken", "client-token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_CLIENT_TOKEN"),
             ChunkSize = ReadInt(configuration, 64 * 1024, "ReverseLlama:ChunkSize", "chunk-size", "REVERSE_LLAMA_CHUNK_SIZE"),
             EmbeddingCachePath = Read(
                 configuration,

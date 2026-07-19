@@ -10,6 +10,7 @@ internal sealed class ManagementStore
     private static readonly TimeSpan ApiKeyLastUsedWriteInterval = TimeSpan.FromMinutes(1);
 
     private readonly Dictionary<string, ApiKeyState> _apiKeysByHash = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ApiKeyState> _clientKeysByHash = new(StringComparer.Ordinal);
     private readonly string _connectionString = "";
     private readonly string _databasePath = "";
     private readonly object _lock = new();
@@ -62,6 +63,22 @@ internal sealed class ManagementStore
             lock (_lock)
             {
                 return _apiKeysByHash.Count > 0;
+            }
+        }
+    }
+
+    public bool HasClientKeys
+    {
+        get
+        {
+            if (!_isAvailable)
+            {
+                return false;
+            }
+
+            lock (_lock)
+            {
+                return _clientKeysByHash.Count > 0;
             }
         }
     }
@@ -197,6 +214,155 @@ internal sealed class ManagementStore
             }
 
             return deleted;
+        }
+    }
+
+    public bool IsClientKeyValid(string clientKey, bool updateLastUsed)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(clientKey))
+        {
+            return false;
+        }
+
+        var hash = HashApiKey(clientKey);
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_lock)
+        {
+            if (!_clientKeysByHash.TryGetValue(hash, out var key))
+            {
+                return false;
+            }
+
+            if (!updateLastUsed
+                || key.LastUsedUtc is not null
+                && now - key.LastUsedUtc.Value < ApiKeyLastUsedWriteInterval)
+            {
+                return true;
+            }
+
+            key.LastUsedUtc = now;
+
+            try
+            {
+                using var connection = OpenConnection();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE client_keys SET last_used_at_utc = $last_used_at_utc WHERE id = $id";
+                command.Parameters.AddWithValue("$last_used_at_utc", now.ToString("O"));
+                command.Parameters.AddWithValue("$id", key.Id);
+                command.ExecuteNonQuery();
+            }
+            catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(exception, "Failed to update client key last-used timestamp.");
+            }
+
+            return true;
+        }
+    }
+
+    public IReadOnlyList<ApiKeyInfo> ListClientKeys()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            return _clientKeysByHash.Values
+                .OrderBy(key => key.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(key => key.CreatedAtUtc)
+                .Select(key => new ApiKeyInfo(
+                    key.Id,
+                    key.Name,
+                    key.KeyPrefix,
+                    key.CreatedAtUtc,
+                    key.LastUsedUtc))
+                .ToList();
+        }
+    }
+
+    public CreatedApiKey CreateClientKey(string? name)
+    {
+        EnsureAvailable();
+
+        var apiKey = GenerateApiKey();
+        var now = DateTimeOffset.UtcNow;
+        var state = new ApiKeyState
+        {
+            Id = Guid.NewGuid().ToString("n"),
+            Name = string.IsNullOrWhiteSpace(name) ? "Client key" : name.Trim(),
+            KeyHash = HashApiKey(apiKey),
+            KeyPrefix = GetKeyPrefix(apiKey),
+            CreatedAtUtc = now
+        };
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO client_keys (id, name, key_hash, key_prefix, created_at_utc)
+                VALUES ($id, $name, $key_hash, $key_prefix, $created_at_utc)
+                """;
+            command.Parameters.AddWithValue("$id", state.Id);
+            command.Parameters.AddWithValue("$name", state.Name);
+            command.Parameters.AddWithValue("$key_hash", state.KeyHash);
+            command.Parameters.AddWithValue("$key_prefix", state.KeyPrefix);
+            command.Parameters.AddWithValue("$created_at_utc", state.CreatedAtUtc.ToString("O"));
+            command.ExecuteNonQuery();
+
+            _clientKeysByHash[state.KeyHash] = state;
+        }
+
+        return new CreatedApiKey(
+            state.Id,
+            state.Name,
+            state.KeyPrefix,
+            state.CreatedAtUtc,
+            apiKey);
+    }
+
+    public bool DeleteClientKey(string id)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(id))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM client_keys WHERE id = $id";
+            command.Parameters.AddWithValue("$id", id);
+            var deleted = command.ExecuteNonQuery() > 0;
+
+            if (deleted)
+            {
+                foreach (var pair in _clientKeysByHash.Where(pair => pair.Value.Id == id).ToArray())
+                {
+                    _clientKeysByHash.Remove(pair.Key);
+                }
+            }
+
+            return deleted;
+        }
+    }
+
+    public string? GetClientKeyId(string clientKey)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(clientKey))
+        {
+            return null;
+        }
+
+        var hash = HashApiKey(clientKey);
+
+        lock (_lock)
+        {
+            return _clientKeysByHash.TryGetValue(hash, out var key) ? key.Id : null;
         }
     }
 
@@ -1825,6 +1991,15 @@ internal sealed class ManagementStore
                     group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
                     PRIMARY KEY (api_key_id, group_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS client_keys (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    key_hash TEXT NOT NULL UNIQUE,
+                    key_prefix TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    last_used_at_utc TEXT NULL
+                );
                 """;
             command.ExecuteNonQuery();
 
@@ -1924,6 +2099,35 @@ internal sealed class ManagementStore
         _logger.LogInformation(
             "Loaded {ApiKeyCount} API key(s) from {DatabasePath}.",
             _apiKeysByHash.Count,
+            _databasePath);
+
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                SELECT id, name, key_hash, key_prefix, created_at_utc, last_used_at_utc
+                FROM client_keys
+                """;
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var state = new ApiKeyState
+                {
+                    Id = reader.GetString(0),
+                    Name = reader.GetString(1),
+                    KeyHash = reader.GetString(2),
+                    KeyPrefix = reader.GetString(3),
+                    CreatedAtUtc = ReadDateTimeOffset(reader.GetString(4)),
+                    LastUsedUtc = ReadNullableDateTimeOffset(reader, 5)
+                };
+
+                _clientKeysByHash[state.KeyHash] = state;
+            }
+        }
+
+        _logger.LogInformation(
+            "Loaded {ClientKeyCount} client key(s) from {DatabasePath}.",
+            _clientKeysByHash.Count,
             _databasePath);
     }
 

@@ -288,6 +288,26 @@ internal static class AdminEndpoints
                 ? Results.NoContent()
                 : Results.NotFound(new { error = $"API key '{id}' was not found." }));
 
+        api.MapGet("/client-keys", (ManagementStore store) =>
+            Results.Json(store.ListClientKeys()));
+
+        api.MapPost("/client-keys", (CreateApiKeyRequest request, ManagementStore store) =>
+        {
+            try
+            {
+                return Results.Json(store.CreateClientKey(request.Name));
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapDelete("/client-keys/{id}", (string id, ManagementStore store) =>
+            store.DeleteClientKey(id)
+                ? Results.NoContent()
+                : Results.NotFound(new { error = $"Client key '{id}' was not found." }));
+
         api.MapGet("/groups", (ManagementStore store) =>
             Results.Json(store.ListGroups()));
 
@@ -599,7 +619,9 @@ internal static class AdminEndpoints
             {
                 keycloakConfigured = settings.Keycloak.IsConfigured,
                 sharedTokenConfigured = !string.IsNullOrWhiteSpace(settings.Token),
-                apiKeysConfigured = store.HasApiKeys
+                clientTokenConfigured = !string.IsNullOrWhiteSpace(settings.ClientToken),
+                apiKeysConfigured = store.HasApiKeys,
+                clientKeysConfigured = store.HasClientKeys
             },
             management = new
             {
@@ -610,6 +632,7 @@ internal static class AdminEndpoints
             clients = BuildClientSummaries(hub, store),
             models = BuildModelSummaries(hub, store),
             apiKeys = store.ListApiKeys(),
+            clientKeys = store.ListClientKeys(),
             groups = store.ListGroups(),
             apiKeyGroups = store.ListApiKeyGroups(),
             clientGroups = store.ResolveClientGroups(

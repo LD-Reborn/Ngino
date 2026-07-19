@@ -15,16 +15,11 @@ internal static class TokenAuthentication
         bool allowQueryToken,
         bool allowPathToken = false)
     {
-        if (string.IsNullOrWhiteSpace(settings.Token) && !managementStore.HasApiKeys)
-        {
-            return AuthResult.Success(null);
-        }
-
         if (request.Headers.TryGetValue(ProtocolConstants.TokenHeader, out var headerValues))
         {
             foreach (var value in headerValues)
             {
-                var result = AuthorizeToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                var result = AuthorizeApiToken(value, settings, managementStore, updateApiKeyLastUsed: true);
                 if (result.IsAuthorized)
                 {
                     return result;
@@ -38,7 +33,7 @@ internal static class TokenAuthentication
             {
                 if (TryGetBearerToken(value, out var bearerToken))
                 {
-                    var result = AuthorizeToken(bearerToken, settings, managementStore, updateApiKeyLastUsed: true);
+                    var result = AuthorizeApiToken(bearerToken, settings, managementStore, updateApiKeyLastUsed: true);
                     if (result.IsAuthorized)
                     {
                         return result;
@@ -53,7 +48,7 @@ internal static class TokenAuthentication
         if (allowPathToken
             && TryGetPathToken(request.Path, out var pathToken, out _))
         {
-            var result = AuthorizeToken(pathToken, settings, managementStore, updateApiKeyLastUsed: true);
+            var result = AuthorizeApiToken(pathToken, settings, managementStore, updateApiKeyLastUsed: true);
             if (result.IsAuthorized)
             {
                 return result;
@@ -68,7 +63,67 @@ internal static class TokenAuthentication
         {
             foreach (var value in queryValues)
             {
-                var result = AuthorizeToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                var result = AuthorizeApiToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                if (result.IsAuthorized)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return AuthResult.Failure;
+    }
+
+    public static AuthResult AuthorizeClient(
+        HttpRequest request,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool allowQueryToken,
+        bool allowPathToken = false)
+    {
+        if (request.Headers.TryGetValue(ProtocolConstants.TokenHeader, out var headerValues))
+        {
+            foreach (var value in headerValues)
+            {
+                var result = AuthorizeClientToken(value, settings, managementStore, updateClientKeyLastUsed: true);
+                if (result.IsAuthorized)
+                {
+                    return result;
+                }
+            }
+        }
+
+        if (request.Headers.TryGetValue("Authorization", out var authorizationValues))
+        {
+            foreach (var value in authorizationValues)
+            {
+                if (TryGetBearerToken(value, out var bearerToken))
+                {
+                    var result = AuthorizeClientToken(bearerToken, settings, managementStore, updateClientKeyLastUsed: true);
+                    if (result.IsAuthorized)
+                    {
+                        return result;
+                    }
+                }
+            }
+        }
+
+        if (allowPathToken
+            && TryGetPathToken(request.Path, out var pathToken, out _))
+        {
+            var result = AuthorizeClientToken(pathToken, settings, managementStore, updateClientKeyLastUsed: true);
+            if (result.IsAuthorized)
+            {
+                return result;
+            }
+        }
+
+        if (allowQueryToken
+            && request.Query.TryGetValue("token", out var queryValues))
+        {
+            foreach (var value in queryValues)
+            {
+                var result = AuthorizeClientToken(value, settings, managementStore, updateClientKeyLastUsed: true);
                 if (result.IsAuthorized)
                 {
                     return result;
@@ -87,6 +142,14 @@ internal static class TokenAuthentication
         bool allowPathToken = false) =>
         Authorize(request, settings, managementStore, allowQueryToken, allowPathToken).IsAuthorized;
 
+    public static bool IsClientAuthorized(
+        HttpRequest request,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool allowQueryToken,
+        bool allowPathToken = false) =>
+        AuthorizeClient(request, settings, managementStore, allowQueryToken, allowPathToken).IsAuthorized;
+
     public static bool TryRemovePathToken(
         PathString path,
         ServerSettings settings,
@@ -96,7 +159,7 @@ internal static class TokenAuthentication
         remainingPath = path;
 
         if (!TryGetPathToken(path, out var pathToken, out var tokenRemainingPath)
-            || !IsTokenAuthorized(pathToken, settings, managementStore, updateApiKeyLastUsed: false))
+            || !IsApiTokenAuthorized(pathToken, settings, managementStore, updateApiKeyLastUsed: false))
         {
             return false;
         }
@@ -109,9 +172,9 @@ internal static class TokenAuthentication
 
     public static bool IsOwnBearerValue(string? value, ServerSettings settings, ManagementStore managementStore) =>
         TryGetBearerToken(value, out var token)
-        && IsTokenAuthorized(token, settings, managementStore, updateApiKeyLastUsed: false);
+        && IsApiTokenAuthorized(token, settings, managementStore, updateApiKeyLastUsed: false);
 
-    private static AuthResult AuthorizeToken(
+    private static AuthResult AuthorizeApiToken(
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
@@ -140,12 +203,48 @@ internal static class TokenAuthentication
         return AuthResult.Failure;
     }
 
+    private static AuthResult AuthorizeClientToken(
+        string? token,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool updateClientKeyLastUsed)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return AuthResult.Failure;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.ClientToken)
+            && CryptographicOperations.FixedTimeEquals(
+                SHA256.HashData(Encoding.UTF8.GetBytes(token)),
+                SHA256.HashData(Encoding.UTF8.GetBytes(settings.ClientToken))))
+        {
+            return AuthResult.Success(null);
+        }
+
+        var clientKeyId = managementStore.GetClientKeyId(token);
+        if (clientKeyId is not null)
+        {
+            managementStore.IsClientKeyValid(token, updateClientKeyLastUsed);
+            return AuthResult.Success(clientKeyId);
+        }
+
+        return AuthResult.Failure;
+    }
+
     public static bool IsTokenAuthorized(
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
         bool updateApiKeyLastUsed) =>
-        AuthorizeToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
+        AuthorizeApiToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
+
+    private static bool IsApiTokenAuthorized(
+        string? token,
+        ServerSettings settings,
+        ManagementStore managementStore,
+        bool updateApiKeyLastUsed) =>
+        AuthorizeApiToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
 
     private static bool TryGetBearerToken(string? authorization, out string token)
     {
