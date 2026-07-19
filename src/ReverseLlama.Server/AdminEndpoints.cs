@@ -268,14 +268,14 @@ internal static class AdminEndpoints
             return Results.Json(result);
         });
 
-        api.MapGet("/api-keys", (ManagementStore store) =>
-            Results.Json(store.ListApiKeys()));
+        api.MapGet("/user-keys", (ManagementStore store) =>
+            Results.Json(store.ListUserKeys()));
 
-        api.MapPost("/api-keys", (CreateApiKeyRequest request, ManagementStore store) =>
+        api.MapPost("/user-keys", (CreateUserKeyRequest request, ManagementStore store) =>
         {
             try
             {
-                return Results.Json(store.CreateApiKey(request.Name));
+                return Results.Json(store.CreateUserKey(request.Name));
             }
             catch (Exception exception)
             {
@@ -283,15 +283,15 @@ internal static class AdminEndpoints
             }
         });
 
-        api.MapDelete("/api-keys/{id}", (string id, ManagementStore store) =>
-            store.DeleteApiKey(id)
+        api.MapDelete("/user-keys/{id}", (string id, ManagementStore store) =>
+            store.DeleteUserKey(id)
                 ? Results.NoContent()
-                : Results.NotFound(new { error = $"API key '{id}' was not found." }));
+                : Results.NotFound(new { error = $"User key '{id}' was not found." }));
 
         api.MapGet("/client-keys", (ManagementStore store) =>
             Results.Json(store.ListClientKeys()));
 
-        api.MapPost("/client-keys", (CreateApiKeyRequest request, ManagementStore store) =>
+        api.MapPost("/client-keys", (CreateUserKeyRequest request, ManagementStore store) =>
         {
             try
             {
@@ -395,21 +395,21 @@ internal static class AdminEndpoints
                 : Results.NotFound(new { error = $"Client '{clientId}' was not found." });
         });
 
-        api.MapGet("/api-keys/groups", (ManagementStore store) =>
-            Results.Json(store.ListApiKeyGroups()));
+        api.MapGet("/user-keys/groups", (ManagementStore store) =>
+            Results.Json(store.ListUserKeyGroups()));
 
-        api.MapPut("/api-keys/{id}/groups", (string id, SetApiKeyGroupsRequest request, ManagementStore store) =>
+        api.MapPut("/user-keys/{id}/groups", (string id, SetUserKeyGroupsRequest request, ManagementStore store) =>
         {
-            var keys = store.ListApiKeys();
+            var keys = store.ListUserKeys();
             if (!keys.Any(k => k.Id == id))
             {
-                return Results.NotFound(new { error = $"API key '{id}' was not found." });
+                return Results.NotFound(new { error = $"User key '{id}' was not found." });
             }
 
             try
             {
-                store.SetApiKeyGroups(id, request.GroupIds ?? []);
-                return Results.Ok(new { apiKeyId = id, groupIds = store.GetApiKeyGroupIds(id) });
+                store.SetUserKeyGroups(id, request.GroupIds ?? []);
+                return Results.Ok(new { userKeyId = id, groupIds = store.GetUserKeyGroupIds(id) });
             }
             catch (Exception exception)
             {
@@ -556,7 +556,7 @@ internal static class AdminEndpoints
             {
                 byModel = store.GetTokenStatsByModel(),
                 byClient = store.GetTokenStatsByClient(),
-                byApiKey = store.GetTokenStatsByApiKey(),
+                byUserKey = store.GetTokenStatsByUserKey(),
                 byGroup = store.GetTokenStatsByGroup()
             }));
 
@@ -620,7 +620,7 @@ internal static class AdminEndpoints
                 keycloakConfigured = settings.Keycloak.IsConfigured,
                 sharedTokenConfigured = !string.IsNullOrWhiteSpace(settings.Token),
                 clientTokenConfigured = !string.IsNullOrWhiteSpace(settings.ClientToken),
-                apiKeysConfigured = store.HasApiKeys,
+                userKeysConfigured = store.HasUserKeys,
                 clientKeysConfigured = store.HasClientKeys
             },
             management = new
@@ -631,10 +631,10 @@ internal static class AdminEndpoints
             },
             clients = BuildClientSummaries(hub, store),
             models = BuildModelSummaries(hub, store),
-            apiKeys = store.ListApiKeys(),
+            userKeys = store.ListUserKeys(),
             clientKeys = store.ListClientKeys(),
             groups = store.ListGroups(),
-            apiKeyGroups = store.ListApiKeyGroups(),
+            userKeyGroups = store.ListUserKeyGroups(),
             clientGroups = store.ResolveClientGroups(
                 hub.ClientSnapshots.Select(c => c.Id).ToList())
         };
@@ -880,7 +880,7 @@ internal sealed record ModelActionRequest(
     string Model,
     string Action);
 
-internal sealed record CreateApiKeyRequest(string? Name);
+internal sealed record CreateUserKeyRequest(string? Name);
 
 internal sealed record CreateGroupRequest(string? Name);
 
@@ -891,7 +891,7 @@ internal sealed record AddGroupClientRequest(
     string? Model,
     string? ClientPattern);
 
-internal sealed record SetApiKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
+internal sealed record SetUserKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
 
 internal sealed record UpdateBillingRequest(
     string? Currency,

@@ -13,7 +13,7 @@ The client opens and maintains a WebSocket connection to the server. The server 
 
 The server provides
 - An API with
-  - Authentication via API keys
+  - Authentication via user keys
   - Authorization (planned)
 - Load balancing (Scale your AI strategy horizontally!)
 - (Ollama-only) Model management (install, remove, load, unload models)
@@ -27,7 +27,7 @@ The server provides
   - What clients are mapped to which groups
 - Billing (planned)
   - (planned) Price per model per thousand tokens
-  - (planned) Usage per API user
+  - (planned) Usage per user key
   - (planned) Rate limiting
 
 The client provides a persistent outbound connection to the server and forwards requests to the local Ollama (or vLLM, etc.) instance. Responses stream back through the tunnel with minimal overhead.
@@ -84,13 +84,14 @@ Server options:
 - `--status-path <path>`: defaults to `/_reverse-llama/status`.
 - `--chunk-size <bytes>` or `REVERSE_LLAMA_CHUNK_SIZE`: defaults to `65536`.
 - `--embedding-cache-path <path>` or `REVERSE_LLAMA_EMBEDDING_CACHE_PATH`: SQLite cache file for embedding vectors. Defaults to `App_Data\embedding-cache.sqlite` under the server app directory.
-- `--management-database-path <path>` or `REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH`: SQLite database for admin API keys, client disable state, and request/model metrics. Defaults to `App_Data\management.sqlite` under the server app directory.
+- `--management-database-path <path>` or `REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH`: SQLite database for admin user keys, client keys, client disable state, and request/model metrics. Defaults to `App_Data\management.sqlite` under the server app directory.
+- `--secure-cookies` or `REVERSE_LLAMA_SECURE_COOKIES`: set to `false` to allow admin auth cookies over plain HTTP (for local development). Defaults to `true`.
 
 Admin UI:
 
 - `GET /admin` opens the Keycloak-protected management UI.
 - The temporary Keycloak settings live under `Authentication:Keycloak` in `appsettings.json`.
-- API keys created in the UI are accepted anywhere the shared token is accepted: `X-Reverse-Llama-Token`, `Authorization: Bearer <key>`, `?token=...`, and `/token/<key>/...`.
+- User keys created in the UI are accepted anywhere the shared token is accepted: `X-Reverse-Llama-Token`, `Authorization: Bearer <key>`, `?token=...`, and `/token/<key>/...`.
 - Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`).
 
 Client options:

@@ -19,6 +19,8 @@ internal sealed class ServerSettings
 
     public string? ManagementDatabasePath { get; init; }
 
+    public bool SecureCookies { get; init; } = true;
+
     public KeycloakSettings Keycloak { get; init; } = new();
 
     public CorsSettings Cors { get; init; } = new();
@@ -42,6 +44,7 @@ internal sealed class ServerSettings
                 "ReverseLlama:ManagementDatabasePath",
                 "management-database-path",
                 "REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH"),
+            SecureCookies = ReadBool(configuration, true, "ReverseLlama:SecureCookies", "secure-cookies", "REVERSE_LLAMA_SECURE_COOKIES"),
             Keycloak = new KeycloakSettings
             {
                 Authority = Read(configuration, "Authentication:Keycloak:Authority", "REVERSE_LLAMA_KEYCLOAK_AUTHORITY"),

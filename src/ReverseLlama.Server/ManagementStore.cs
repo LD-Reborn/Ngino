@@ -7,10 +7,10 @@ namespace ReverseLlama.Server;
 
 internal sealed class ManagementStore
 {
-    private static readonly TimeSpan ApiKeyLastUsedWriteInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan UserKeyLastUsedWriteInterval = TimeSpan.FromMinutes(1);
 
-    private readonly Dictionary<string, ApiKeyState> _apiKeysByHash = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, ApiKeyState> _clientKeysByHash = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, KeyState> _userKeysByHash = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, KeyState> _clientKeysByHash = new(StringComparer.Ordinal);
     private readonly string _connectionString = "";
     private readonly string _databasePath = "";
     private readonly object _lock = new();
@@ -51,7 +51,7 @@ internal sealed class ManagementStore
 
     public string? LastError => _lastError;
 
-    public bool HasApiKeys
+    public bool HasUserKeys
     {
         get
         {
@@ -62,7 +62,7 @@ internal sealed class ManagementStore
 
             lock (_lock)
             {
-                return _apiKeysByHash.Count > 0;
+                return _userKeysByHash.Count > 0;
             }
         }
     }
@@ -83,26 +83,26 @@ internal sealed class ManagementStore
         }
     }
 
-    public bool IsApiKeyValid(string apiKey, bool updateLastUsed)
+    public bool IsUserKeyValid(string userKey, bool updateLastUsed)
     {
-        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKey))
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKey))
         {
             return false;
         }
 
-        var hash = HashApiKey(apiKey);
+        var hash = HashKey(userKey);
         var now = DateTimeOffset.UtcNow;
 
         lock (_lock)
         {
-            if (!_apiKeysByHash.TryGetValue(hash, out var key))
+            if (!_userKeysByHash.TryGetValue(hash, out var key))
             {
                 return false;
             }
 
             if (!updateLastUsed
                 || key.LastUsedUtc is not null
-                && now - key.LastUsedUtc.Value < ApiKeyLastUsedWriteInterval)
+                && now - key.LastUsedUtc.Value < UserKeyLastUsedWriteInterval)
             {
                 return true;
             }
@@ -113,21 +113,21 @@ internal sealed class ManagementStore
             {
                 using var connection = OpenConnection();
                 using var command = connection.CreateCommand();
-                command.CommandText = "UPDATE api_keys SET last_used_at_utc = $last_used_at_utc WHERE id = $id";
+                command.CommandText = "UPDATE user_keys SET last_used_at_utc = $last_used_at_utc WHERE id = $id";
                 command.Parameters.AddWithValue("$last_used_at_utc", now.ToString("O"));
                 command.Parameters.AddWithValue("$id", key.Id);
                 command.ExecuteNonQuery();
             }
             catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
             {
-                _logger.LogWarning(exception, "Failed to update API key last-used timestamp.");
+                _logger.LogWarning(exception, "Failed to update user key last-used timestamp.");
             }
 
             return true;
         }
     }
 
-    public IReadOnlyList<ApiKeyInfo> ListApiKeys()
+    public IReadOnlyList<UserKeyInfo> ListUserKeys()
     {
         if (!_isAvailable)
         {
@@ -136,10 +136,10 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            return _apiKeysByHash.Values
+            return _userKeysByHash.Values
                 .OrderBy(key => key.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(key => key.CreatedAtUtc)
-                .Select(key => new ApiKeyInfo(
+                .Select(key => new UserKeyInfo(
                     key.Id,
                     key.Name,
                     key.KeyPrefix,
@@ -149,18 +149,18 @@ internal sealed class ManagementStore
         }
     }
 
-    public CreatedApiKey CreateApiKey(string? name)
+    public CreatedUserKey CreateUserKey(string? name)
     {
         EnsureAvailable();
 
-        var apiKey = GenerateApiKey();
+        var key = GenerateKey();
         var now = DateTimeOffset.UtcNow;
-        var state = new ApiKeyState
+        var state = new KeyState
         {
             Id = Guid.NewGuid().ToString("n"),
-            Name = string.IsNullOrWhiteSpace(name) ? "API key" : name.Trim(),
-            KeyHash = HashApiKey(apiKey),
-            KeyPrefix = GetKeyPrefix(apiKey),
+            Name = string.IsNullOrWhiteSpace(name) ? "User key" : name.Trim(),
+            KeyHash = HashKey(key),
+            KeyPrefix = GetKeyPrefix(key),
             CreatedAtUtc = now
         };
 
@@ -169,7 +169,7 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                INSERT INTO api_keys (id, name, key_hash, key_prefix, created_at_utc)
+                INSERT INTO user_keys (id, name, key_hash, key_prefix, created_at_utc)
                 VALUES ($id, $name, $key_hash, $key_prefix, $created_at_utc)
                 """;
             command.Parameters.AddWithValue("$id", state.Id);
@@ -179,18 +179,18 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$created_at_utc", state.CreatedAtUtc.ToString("O"));
             command.ExecuteNonQuery();
 
-            _apiKeysByHash[state.KeyHash] = state;
+            _userKeysByHash[state.KeyHash] = state;
         }
 
-        return new CreatedApiKey(
+        return new CreatedUserKey(
             state.Id,
             state.Name,
             state.KeyPrefix,
             state.CreatedAtUtc,
-            apiKey);
+            key);
     }
 
-    public bool DeleteApiKey(string id)
+    public bool DeleteUserKey(string id)
     {
         if (!_isAvailable || string.IsNullOrWhiteSpace(id))
         {
@@ -201,15 +201,15 @@ internal sealed class ManagementStore
         {
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
-            command.CommandText = "DELETE FROM api_keys WHERE id = $id";
+            command.CommandText = "DELETE FROM user_keys WHERE id = $id";
             command.Parameters.AddWithValue("$id", id);
             var deleted = command.ExecuteNonQuery() > 0;
 
             if (deleted)
             {
-                foreach (var pair in _apiKeysByHash.Where(pair => pair.Value.Id == id).ToArray())
+                foreach (var pair in _userKeysByHash.Where(pair => pair.Value.Id == id).ToArray())
                 {
-                    _apiKeysByHash.Remove(pair.Key);
+                    _userKeysByHash.Remove(pair.Key);
                 }
             }
 
@@ -224,7 +224,7 @@ internal sealed class ManagementStore
             return false;
         }
 
-        var hash = HashApiKey(clientKey);
+        var hash = HashKey(clientKey);
         var now = DateTimeOffset.UtcNow;
 
         lock (_lock)
@@ -236,7 +236,7 @@ internal sealed class ManagementStore
 
             if (!updateLastUsed
                 || key.LastUsedUtc is not null
-                && now - key.LastUsedUtc.Value < ApiKeyLastUsedWriteInterval)
+                && now - key.LastUsedUtc.Value < UserKeyLastUsedWriteInterval)
             {
                 return true;
             }
@@ -261,7 +261,7 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<ApiKeyInfo> ListClientKeys()
+    public IReadOnlyList<UserKeyInfo> ListClientKeys()
     {
         if (!_isAvailable)
         {
@@ -273,7 +273,7 @@ internal sealed class ManagementStore
             return _clientKeysByHash.Values
                 .OrderBy(key => key.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(key => key.CreatedAtUtc)
-                .Select(key => new ApiKeyInfo(
+                .Select(key => new UserKeyInfo(
                     key.Id,
                     key.Name,
                     key.KeyPrefix,
@@ -283,18 +283,18 @@ internal sealed class ManagementStore
         }
     }
 
-    public CreatedApiKey CreateClientKey(string? name)
+    public CreatedUserKey CreateClientKey(string? name)
     {
         EnsureAvailable();
 
-        var apiKey = GenerateApiKey();
+        var key = GenerateKey();
         var now = DateTimeOffset.UtcNow;
-        var state = new ApiKeyState
+        var state = new KeyState
         {
             Id = Guid.NewGuid().ToString("n"),
             Name = string.IsNullOrWhiteSpace(name) ? "Client key" : name.Trim(),
-            KeyHash = HashApiKey(apiKey),
-            KeyPrefix = GetKeyPrefix(apiKey),
+            KeyHash = HashKey(key),
+            KeyPrefix = GetKeyPrefix(key),
             CreatedAtUtc = now
         };
 
@@ -316,12 +316,12 @@ internal sealed class ManagementStore
             _clientKeysByHash[state.KeyHash] = state;
         }
 
-        return new CreatedApiKey(
+        return new CreatedUserKey(
             state.Id,
             state.Name,
             state.KeyPrefix,
             state.CreatedAtUtc,
-            apiKey);
+            key);
     }
 
     public bool DeleteClientKey(string id)
@@ -358,7 +358,7 @@ internal sealed class ManagementStore
             return null;
         }
 
-        var hash = HashApiKey(clientKey);
+        var hash = HashKey(clientKey);
 
         lock (_lock)
         {
@@ -547,7 +547,7 @@ internal sealed class ManagementStore
                         prompt_tokens,
                         completion_tokens,
                         token_count,
-                        api_key_id,
+                        user_key_id,
                         cost,
                         started_at_utc,
                         completed_at_utc,
@@ -561,7 +561,7 @@ internal sealed class ManagementStore
                         $prompt_tokens,
                         $completion_tokens,
                         $token_count,
-                        $api_key_id,
+                        $user_key_id,
                         $cost,
                         $started_at_utc,
                         $completed_at_utc,
@@ -575,7 +575,7 @@ internal sealed class ManagementStore
                 command.Parameters.AddWithValue("$prompt_tokens", metric.PromptTokens);
                 command.Parameters.AddWithValue("$completion_tokens", metric.CompletionTokens);
                 command.Parameters.AddWithValue("$token_count", metric.TokenCount);
-                command.Parameters.AddWithValue("$api_key_id", string.IsNullOrWhiteSpace(metric.ApiKeyId) ? DBNull.Value : metric.ApiKeyId);
+                command.Parameters.AddWithValue("$user_key_id", string.IsNullOrWhiteSpace(metric.UserKeyId) ? DBNull.Value : metric.UserKeyId);
                 command.Parameters.AddWithValue("$cost", metric.Cost);
                 command.Parameters.AddWithValue("$started_at_utc", metric.StartedAtUtc.ToString("O"));
                 command.Parameters.AddWithValue("$completed_at_utc", metric.CompletedAtUtc.ToString("O"));
@@ -676,18 +676,18 @@ internal sealed class ManagementStore
         return result;
     }
 
-    public string? GetApiKeyId(string apiKey)
+    public string? GetUserKeyId(string userKey)
     {
-        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKey))
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKey))
         {
             return null;
         }
 
-        var hash = HashApiKey(apiKey);
+        var hash = HashKey(userKey);
 
         lock (_lock)
         {
-            return _apiKeysByHash.TryGetValue(hash, out var key) ? key.Id : null;
+            return _userKeysByHash.TryGetValue(hash, out var key) ? key.Id : null;
         }
     }
 
@@ -911,9 +911,9 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<string> GetApiKeyGroupIds(string apiKeyId)
+    public IReadOnlyList<string> GetUserKeyGroupIds(string userKeyId)
     {
-        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKeyId))
         {
             return [];
         }
@@ -924,11 +924,11 @@ internal sealed class ManagementStore
             using var command = connection.CreateCommand();
             command.CommandText = """
                 SELECT g.id FROM groups g
-                INNER JOIN api_key_groups akg ON g.id = akg.group_id
-                WHERE akg.api_key_id = $api_key_id
+                INNER JOIN user_key_groups ukg ON g.id = ukg.group_id
+                WHERE ukg.user_key_id = $user_key_id
                 ORDER BY g.name
                 """;
-            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+            command.Parameters.AddWithValue("$user_key_id", userKeyId);
 
             var result = new List<string>();
             using var reader = command.ExecuteReader();
@@ -941,13 +941,13 @@ internal sealed class ManagementStore
         }
     }
 
-    public void SetApiKeyGroups(string apiKeyId, IReadOnlyList<string> groupIds)
+    public void SetUserKeyGroups(string userKeyId, IReadOnlyList<string> groupIds)
     {
         EnsureAvailable();
 
-        if (string.IsNullOrWhiteSpace(apiKeyId))
+        if (string.IsNullOrWhiteSpace(userKeyId))
         {
-            throw new ArgumentException("API key id is required.", nameof(apiKeyId));
+            throw new ArgumentException("User key id is required.", nameof(userKeyId));
         }
 
         lock (_lock)
@@ -960,8 +960,8 @@ internal sealed class ManagementStore
                 using (var deleteCommand = connection.CreateCommand())
                 {
                     deleteCommand.Transaction = transaction;
-                    deleteCommand.CommandText = "DELETE FROM api_key_groups WHERE api_key_id = $api_key_id";
-                    deleteCommand.Parameters.AddWithValue("$api_key_id", apiKeyId);
+                    deleteCommand.CommandText = "DELETE FROM user_key_groups WHERE user_key_id = $user_key_id";
+                    deleteCommand.Parameters.AddWithValue("$user_key_id", userKeyId);
                     deleteCommand.ExecuteNonQuery();
                 }
 
@@ -969,13 +969,13 @@ internal sealed class ManagementStore
                 {
                     insertCommand.Transaction = transaction;
                     insertCommand.CommandText = """
-                        INSERT INTO api_key_groups (api_key_id, group_id)
-                        VALUES ($api_key_id, $group_id)
+                        INSERT INTO user_key_groups (user_key_id, group_id)
+                        VALUES ($user_key_id, $group_id)
                         """;
 
-                    var apiKeyParam = insertCommand.Parameters.Add("$api_key_id", SqliteType.Text);
+                    var userKeyParam = insertCommand.Parameters.Add("$user_key_id", SqliteType.Text);
                     var groupParam = insertCommand.Parameters.Add("$group_id", SqliteType.Text);
-                    apiKeyParam.Value = apiKeyId;
+                    userKeyParam.Value = userKeyId;
 
                     foreach (var groupId in groupIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase))
                     {
@@ -994,7 +994,7 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<ApiKeyGroupInfo> ListApiKeyGroups()
+    public IReadOnlyList<UserKeyGroupInfo> ListUserKeyGroups()
     {
         if (!_isAvailable)
         {
@@ -1006,17 +1006,17 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT ak.id, ak.name, ak.key_prefix,
+                SELECT uk.id, uk.name, uk.key_prefix,
                     GROUP_CONCAT(g.id) as group_ids,
                     GROUP_CONCAT(g.name) as group_names
-                FROM api_keys ak
-                LEFT JOIN api_key_groups akg ON ak.id = akg.api_key_id
-                LEFT JOIN groups g ON akg.group_id = g.id
-                GROUP BY ak.id
-                ORDER BY ak.name
+                FROM user_keys uk
+                LEFT JOIN user_key_groups ukg ON uk.id = ukg.user_key_id
+                LEFT JOIN groups g ON ukg.group_id = g.id
+                GROUP BY uk.id
+                ORDER BY uk.name
                 """;
 
-            var result = new List<ApiKeyGroupInfo>();
+            var result = new List<UserKeyGroupInfo>();
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
@@ -1030,26 +1030,26 @@ internal sealed class ManagementStore
                     ? []
                     : reader.GetString(4).Split(',', StringSplitOptions.RemoveEmptyEntries);
 
-                result.Add(new ApiKeyGroupInfo(keyId, keyName, keyPrefix, groupIds, groupNames));
+                result.Add(new UserKeyGroupInfo(keyId, keyName, keyPrefix, groupIds, groupNames));
             }
 
             return result;
         }
     }
 
-    public GroupAccess ResolveGroupAccess(string? apiKeyId)
+    public GroupAccess ResolveGroupAccess(string? userKeyId)
     {
-        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKeyId))
         {
             return GroupAccess.Unrestricted;
         }
 
         lock (_lock)
         {
-            var groupIds = GetApiKeyGroupIdsLocked(apiKeyId);
+            var groupIds = GetUserKeyGroupIdsLocked(userKeyId);
             if (groupIds.Count == 0)
             {
-                return GroupAccess.Empty;
+                return GroupAccess.Unrestricted;
             }
 
             var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1060,10 +1060,10 @@ internal sealed class ManagementStore
             command.CommandText = """
                 SELECT gm.client_id, gm.model, gm.client_pattern
                 FROM group_members gm
-                INNER JOIN api_key_groups akg ON gm.group_id = akg.group_id
-                WHERE akg.api_key_id = $api_key_id
+                INNER JOIN user_key_groups ukg ON gm.group_id = ukg.group_id
+                WHERE ukg.user_key_id = $user_key_id
                 """;
-            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+            command.Parameters.AddWithValue("$user_key_id", userKeyId);
 
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -1505,8 +1505,8 @@ internal sealed class ManagementStore
                 costCmd.CommandText = """
                     SELECT COALESCE(SUM(rm.cost), 0)
                     FROM request_metrics rm
-                    INNER JOIN api_key_groups akg ON rm.api_key_id = akg.api_key_id
-                    WHERE akg.group_id = $group_id AND rm.api_key_id IS NOT NULL
+                    INNER JOIN user_key_groups ukg ON rm.user_key_id = ukg.user_key_id
+                    WHERE ukg.group_id = $group_id AND rm.user_key_id IS NOT NULL
                     """;
                 costCmd.Parameters.AddWithValue("$group_id", groupId);
                 totalCosts = Convert.ToDouble(costCmd.ExecuteScalar());
@@ -1516,9 +1516,9 @@ internal sealed class ManagementStore
         }
     }
 
-    public GroupBillingInfo? ResolveBillingForApiKey(string? apiKeyId)
+    public GroupBillingInfo? ResolveBillingForUserKey(string? userKeyId)
     {
-        if (!_isAvailable || string.IsNullOrWhiteSpace(apiKeyId))
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKeyId))
         {
             return null;
         }
@@ -1530,12 +1530,12 @@ internal sealed class ManagementStore
             command.CommandText = """
                 SELECT gb.group_id, gb.currency, gb.default_rate_per_1k, gb.refuse_below_balance, gb.enabled, gb.created_at_utc, gb.updated_at_utc
                 FROM group_billing gb
-                INNER JOIN api_key_groups akg ON gb.group_id = akg.group_id
-                WHERE akg.api_key_id = $api_key_id AND gb.enabled = 1
+                INNER JOIN user_key_groups ukg ON gb.group_id = ukg.group_id
+                WHERE ukg.user_key_id = $user_key_id AND gb.enabled = 1
                 ORDER BY gb.created_at_utc ASC
                 LIMIT 1
                 """;
-            command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+            command.Parameters.AddWithValue("$user_key_id", userKeyId);
 
             using var reader = command.ExecuteReader();
             if (!reader.Read())
@@ -1596,9 +1596,9 @@ internal sealed class ManagementStore
         }
     }
 
-    public (bool Allowed, double Balance, string Currency, double Threshold) CheckBalanceForApiKey(string? apiKeyId)
+    public (bool Allowed, double Balance, string Currency, double Threshold) CheckBalanceForUserKey(string? userKeyId)
     {
-        var billing = ResolveBillingForApiKey(apiKeyId);
+        var billing = ResolveBillingForUserKey(userKeyId);
         if (billing is null)
         {
             return (true, 0, "", 0);
@@ -1686,7 +1686,7 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<TokenStatsByApiKey> GetTokenStatsByApiKey()
+    public IReadOnlyList<TokenStatsByUserKey> GetTokenStatsByUserKey()
     {
         if (!_isAvailable)
         {
@@ -1698,23 +1698,23 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT rm.api_key_id, COALESCE(ak.name, 'Unknown'), COALESCE(ak.key_prefix, ''),
+                SELECT rm.user_key_id, COALESCE(uk.name, 'Unknown'), COALESCE(uk.key_prefix, ''),
                     COALESCE(SUM(rm.prompt_tokens), 0),
                     COALESCE(SUM(rm.completion_tokens), 0),
                     COALESCE(SUM(rm.token_count), 0),
                     COUNT(*)
                 FROM request_metrics rm
-                LEFT JOIN api_keys ak ON rm.api_key_id = ak.id
-                WHERE rm.api_key_id IS NOT NULL
-                GROUP BY rm.api_key_id
-                ORDER BY ak.name
+                LEFT JOIN user_keys uk ON rm.user_key_id = uk.id
+                WHERE rm.user_key_id IS NOT NULL
+                GROUP BY rm.user_key_id
+                ORDER BY uk.name
                 """;
 
-            var result = new List<TokenStatsByApiKey>();
+            var result = new List<TokenStatsByUserKey>();
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                result.Add(new TokenStatsByApiKey(
+                result.Add(new TokenStatsByUserKey(
                     reader.GetString(0),
                     reader.GetString(1),
                     reader.GetString(2),
@@ -1746,9 +1746,9 @@ internal sealed class ManagementStore
                     COALESCE(SUM(rm.token_count), 0),
                     COUNT(*)
                 FROM request_metrics rm
-                INNER JOIN api_key_groups akg ON rm.api_key_id = akg.api_key_id
+                INNER JOIN user_key_groups akg ON rm.user_key_id = akg.user_key_id
                 INNER JOIN groups g ON akg.group_id = g.id
-                WHERE rm.api_key_id IS NOT NULL
+                WHERE rm.user_key_id IS NOT NULL
                 GROUP BY akg.group_id
                 ORDER BY g.name
                 """;
@@ -1785,7 +1785,7 @@ internal sealed class ManagementStore
                 SELECT rm.client_id,
                     COALESCE(SUM(rm.cost), 0)
                 FROM request_metrics rm
-                WHERE rm.api_key_id IS NOT NULL AND rm.cost > 0
+                WHERE rm.user_key_id IS NOT NULL AND rm.cost > 0
                 GROUP BY rm.client_id
                 ORDER BY rm.client_id
                 """;
@@ -1797,7 +1797,7 @@ internal sealed class ManagementStore
                 var clientId = reader.GetString(0);
                 var revenue = reader.GetDouble(1);
 
-                var billing = ResolveBillingForApiKeyForClientLocked(clientId);
+                var billing = ResolveBillingForUserKeyForClientLocked(clientId);
                 var currency = billing?.Currency ?? "EUR";
 
                 result.Add(new ClientRevenue(clientId, revenue, currency));
@@ -1858,15 +1858,15 @@ internal sealed class ManagementStore
             ReadDateTimeOffset(reader.GetString(6)));
     }
 
-    private GroupBillingInfo? ResolveBillingForApiKeyForClientLocked(string clientId)
+    private GroupBillingInfo? ResolveBillingForUserKeyForClientLocked(string clientId)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT gb.group_id, gb.currency, gb.default_rate_per_1k, gb.refuse_below_balance, gb.enabled, gb.created_at_utc, gb.updated_at_utc
             FROM group_billing gb
-            INNER JOIN api_key_groups akg ON gb.group_id = akg.group_id
-            INNER JOIN request_metrics rm ON rm.api_key_id = akg.api_key_id
+            INNER JOIN user_key_groups ukg ON gb.group_id = ukg.group_id
+            INNER JOIN request_metrics rm ON rm.user_key_id = ukg.user_key_id
             WHERE rm.client_id = $client_id AND gb.enabled = 1
             ORDER BY gb.created_at_utc ASC
             LIMIT 1
@@ -1889,12 +1889,12 @@ internal sealed class ManagementStore
             ReadDateTimeOffset(reader.GetString(6)));
     }
 
-    private IReadOnlyList<string> GetApiKeyGroupIdsLocked(string apiKeyId)
+    private IReadOnlyList<string> GetUserKeyGroupIdsLocked(string userKeyId)
     {
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT group_id FROM api_key_groups WHERE api_key_id = $api_key_id";
-        command.Parameters.AddWithValue("$api_key_id", apiKeyId);
+        command.CommandText = "SELECT group_id FROM user_key_groups WHERE user_key_id = $user_key_id";
+        command.Parameters.AddWithValue("$user_key_id", userKeyId);
 
         var result = new List<string>();
         using var reader = command.ExecuteReader();
@@ -1940,7 +1940,7 @@ internal sealed class ManagementStore
                     updated_at_utc TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS api_keys (
+                CREATE TABLE IF NOT EXISTS user_keys (
                     id TEXT NOT NULL PRIMARY KEY,
                     name TEXT NOT NULL,
                     key_hash TEXT NOT NULL UNIQUE,
@@ -1957,6 +1957,10 @@ internal sealed class ManagementStore
                     path TEXT NOT NULL,
                     status_code INTEGER NULL,
                     token_count INTEGER NOT NULL DEFAULT 0,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    user_key_id TEXT NULL,
+                    cost REAL NOT NULL DEFAULT 0,
                     started_at_utc TEXT NOT NULL,
                     completed_at_utc TEXT NOT NULL,
                     duration_ms REAL NOT NULL
@@ -1967,6 +1971,9 @@ internal sealed class ManagementStore
 
                 CREATE INDEX IF NOT EXISTS idx_request_metrics_model_started
                     ON request_metrics (model, started_at_utc);
+
+                CREATE INDEX IF NOT EXISTS idx_request_metrics_user_key
+                    ON request_metrics (user_key_id, started_at_utc);
 
                 CREATE TABLE IF NOT EXISTS groups (
                     id TEXT NOT NULL PRIMARY KEY,
@@ -1986,10 +1993,10 @@ internal sealed class ManagementStore
                 CREATE INDEX IF NOT EXISTS idx_group_members_group_id
                     ON group_members (group_id);
 
-                CREATE TABLE IF NOT EXISTS api_key_groups (
-                    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+                CREATE TABLE IF NOT EXISTS user_key_groups (
+                    user_key_id TEXT NOT NULL REFERENCES user_keys(id) ON DELETE CASCADE,
                     group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-                    PRIMARY KEY (api_key_id, group_id)
+                    PRIMARY KEY (user_key_id, group_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS client_keys (
@@ -2021,7 +2028,7 @@ internal sealed class ManagementStore
                 alter2.ExecuteNonQuery();
 
                 using var alter3 = connection.CreateCommand();
-                alter3.CommandText = "ALTER TABLE request_metrics ADD COLUMN api_key_id TEXT NULL";
+                alter3.CommandText = "ALTER TABLE request_metrics ADD COLUMN user_key_id TEXT NULL";
                 alter3.ExecuteNonQuery();
 
                 using var alter4 = connection.CreateCommand();
@@ -2029,8 +2036,42 @@ internal sealed class ManagementStore
                 alter4.ExecuteNonQuery();
 
                 using var idx = connection.CreateCommand();
-                idx.CommandText = "CREATE INDEX IF NOT EXISTS idx_request_metrics_api_key ON request_metrics (api_key_id, started_at_utc)";
+                idx.CommandText = "CREATE INDEX IF NOT EXISTS idx_request_metrics_user_key ON request_metrics (user_key_id, started_at_utc)";
                 idx.ExecuteNonQuery();
+            }
+            else
+            {
+                using var checkCol = connection.CreateCommand();
+                checkCol.CommandText = "SELECT COUNT(*) FROM pragma_table_info('request_metrics') WHERE name = 'api_key_id'";
+                var hasOldColumn = (long)checkCol.ExecuteScalar()! > 0;
+
+                if (hasOldColumn)
+                {
+                    using var rename = connection.CreateCommand();
+                    rename.CommandText = "ALTER TABLE request_metrics RENAME COLUMN api_key_id TO user_key_id";
+                    rename.ExecuteNonQuery();
+
+                    using var idx = connection.CreateCommand();
+                    idx.CommandText = "CREATE INDEX IF NOT EXISTS idx_request_metrics_user_key ON request_metrics (user_key_id, started_at_utc)";
+                    idx.ExecuteNonQuery();
+                }
+                else
+                {
+                    using var checkNew = connection.CreateCommand();
+                    checkNew.CommandText = "SELECT COUNT(*) FROM pragma_table_info('request_metrics') WHERE name = 'user_key_id'";
+                    var hasNewColumn = (long)checkNew.ExecuteScalar()! > 0;
+
+                    if (!hasNewColumn)
+                    {
+                        using var addCol = connection.CreateCommand();
+                        addCol.CommandText = "ALTER TABLE request_metrics ADD COLUMN user_key_id TEXT NULL";
+                        addCol.ExecuteNonQuery();
+
+                        using var idx = connection.CreateCommand();
+                        idx.CommandText = "CREATE INDEX IF NOT EXISTS idx_request_metrics_user_key ON request_metrics (user_key_id, started_at_utc)";
+                        idx.ExecuteNonQuery();
+                    }
+                }
             }
         }
 
@@ -2070,19 +2111,71 @@ internal sealed class ManagementStore
                 """;
             command2.ExecuteNonQuery();
         }
+
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_key_groups'
+                """;
+            var hasOldTable = (long)migrate.ExecuteScalar()! > 0;
+
+            if (hasOldTable)
+            {
+                using var rename = connection.CreateCommand();
+                rename.CommandText = "ALTER TABLE api_key_groups RENAME TO user_key_groups";
+                rename.ExecuteNonQuery();
+
+                using var renameCol = connection.CreateCommand();
+                renameCol.CommandText = "ALTER TABLE user_key_groups RENAME COLUMN api_key_id TO user_key_id";
+                renameCol.ExecuteNonQuery();
+            }
+            else
+            {
+                migrate.CommandText = """
+                    SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='user_key_groups'
+                    """;
+                var hasNewTable = (long)migrate.ExecuteScalar()! > 0;
+
+                if (hasNewTable)
+                {
+                    using var checkCol = connection.CreateCommand();
+                    checkCol.CommandText = "SELECT COUNT(*) FROM pragma_table_info('user_key_groups') WHERE name = 'api_key_id'";
+                    var hasOldCol = (long)checkCol.ExecuteScalar()! > 0;
+
+                    if (hasOldCol)
+                    {
+                        using var renameCol = connection.CreateCommand();
+                        renameCol.CommandText = "ALTER TABLE user_key_groups RENAME COLUMN api_key_id TO user_key_id";
+                        renameCol.ExecuteNonQuery();
+                    }
+                }
+            }
+
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='api_keys'
+                """;
+            var hasOldApiKeys = (long)migrate.ExecuteScalar()! > 0;
+
+            if (hasOldApiKeys)
+            {
+                using var rename = connection.CreateCommand();
+                rename.CommandText = "ALTER TABLE api_keys RENAME TO user_keys";
+                rename.ExecuteNonQuery();
+            }
+        }
         }
 
         using (var command = connection.CreateCommand())
         {
             command.CommandText = """
                 SELECT id, name, key_hash, key_prefix, created_at_utc, last_used_at_utc
-                FROM api_keys
+                FROM user_keys
                 """;
 
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                var state = new ApiKeyState
+                var state = new KeyState
                 {
                     Id = reader.GetString(0),
                     Name = reader.GetString(1),
@@ -2092,13 +2185,13 @@ internal sealed class ManagementStore
                     LastUsedUtc = ReadNullableDateTimeOffset(reader, 5)
                 };
 
-                _apiKeysByHash[state.KeyHash] = state;
+                _userKeysByHash[state.KeyHash] = state;
             }
         }
 
         _logger.LogInformation(
-            "Loaded {ApiKeyCount} API key(s) from {DatabasePath}.",
-            _apiKeysByHash.Count,
+            "Loaded {UserKeyCount} user key(s) from {DatabasePath}.",
+            _userKeysByHash.Count,
             _databasePath);
 
         using (var command = connection.CreateCommand())
@@ -2111,7 +2204,7 @@ internal sealed class ManagementStore
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                var state = new ApiKeyState
+                var state = new KeyState
                 {
                     Id = reader.GetString(0),
                     Name = reader.GetString(1),
@@ -2152,17 +2245,17 @@ internal sealed class ManagementStore
     private static DateTimeOffset ReadDateTimeOffset(string value) =>
         DateTimeOffset.TryParse(value, out var parsed) ? parsed : DateTimeOffset.MinValue;
 
-    private static string GenerateApiKey()
+    private static string GenerateKey()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
         return $"rl_{Base64UrlEncode(bytes)}";
     }
 
-    private static string HashApiKey(string apiKey) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey))).ToLowerInvariant();
+    private static string HashKey(string key) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
 
-    private static string GetKeyPrefix(string apiKey) =>
-        apiKey.Length <= 12 ? apiKey : apiKey[..12];
+    private static string GetKeyPrefix(string key) =>
+        key.Length <= 12 ? key : key[..12];
 
     private static string Base64UrlEncode(byte[] bytes) =>
         Convert.ToBase64String(bytes)
@@ -2183,7 +2276,7 @@ internal sealed class ManagementStore
         return Path.Combine(AppContext.BaseDirectory, "App_Data", "management.sqlite");
     }
 
-    private sealed class ApiKeyState
+    private sealed class KeyState
     {
         public string Id { get; init; } = "";
 
@@ -2208,14 +2301,14 @@ internal sealed record ClientAccess(
     public static ClientAccess Enabled { get; } = new(false, null, false, null);
 }
 
-internal sealed record ApiKeyInfo(
+internal sealed record UserKeyInfo(
     string Id,
     string Name,
     string KeyPrefix,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? LastUsedUtc);
 
-internal sealed record CreatedApiKey(
+internal sealed record CreatedUserKey(
     string Id,
     string Name,
     string KeyPrefix,
@@ -2231,7 +2324,7 @@ internal sealed record RequestMetric(
     int PromptTokens,
     int CompletionTokens,
     int TokenCount,
-    string? ApiKeyId,
+    string? UserKeyId,
     double Cost,
     DateTimeOffset StartedAtUtc,
     DateTimeOffset CompletedAtUtc,
@@ -2294,10 +2387,10 @@ internal sealed record TokenStatsByClient(
     long TotalTokens,
     long Requests);
 
-internal sealed record TokenStatsByApiKey(
-    string ApiKeyId,
-    string ApiKeyName,
-    string ApiKeyPrefix,
+internal sealed record TokenStatsByUserKey(
+    string UserKeyId,
+    string UserKeyName,
+    string UserKeyPrefix,
     long PromptTokens,
     long CompletionTokens,
     long TotalTokens,
@@ -2329,10 +2422,10 @@ internal sealed record GroupClientInfo(
     string? Model,
     string? ClientPattern);
 
-internal sealed record ApiKeyGroupInfo(
-    string ApiKeyId,
-    string ApiKeyName,
-    string ApiKeyPrefix,
+internal sealed record UserKeyGroupInfo(
+    string UserKeyId,
+    string UserKeyName,
+    string UserKeyPrefix,
     IReadOnlyList<string> GroupIds,
     IReadOnlyList<string> GroupNames);
 

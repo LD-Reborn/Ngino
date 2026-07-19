@@ -77,12 +77,12 @@ content.addEventListener("click", async (event) => {
     }
 
     if (action === "delete-key") {
-      if (!confirm("Delete this API key?")) {
+      if (!confirm("Delete this user key?")) {
         return;
       }
 
-      await api(`/api-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
-      setNotice("API key deleted.");
+      await api(`/user-keys/${encodeURIComponent(keyId)}`, { method: "DELETE" });
+      setNotice("User key deleted.");
       await refresh();
     }
 
@@ -98,7 +98,7 @@ content.addEventListener("click", async (event) => {
 
     if (action === "copy-key") {
       await navigator.clipboard.writeText(button.dataset.key);
-      setNotice("API key copied.");
+      setNotice("User key copied.");
     }
 
     if (action === "delete-group") {
@@ -123,7 +123,7 @@ content.addEventListener("click", async (event) => {
     }
 
     if (action === "toggle-key-assignment") {
-      await toggleApiKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
+      await toggleUserKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
     }
 
     if (action === "delete-billing-rule") {
@@ -176,12 +176,12 @@ content.addEventListener("submit", async (event) => {
       await loadModelDetail(data.model, data.clientId);
     }
 
-    if (form.dataset.form === "api-key") {
-      state.newKey = await api("/api-keys", {
+    if (form.dataset.form === "user-key") {
+      state.newKey = await api("/user-keys", {
         method: "POST",
         body: { name: data.name }
       });
-      setNotice("API key created.");
+      setNotice("User key created.");
       await refresh();
     }
 
@@ -374,8 +374,8 @@ async function renderRoute(showLoading = true) {
     return;
   }
 
-  if (view === "api-keys") {
-    renderApiKeys();
+  if (view === "user-keys") {
+    renderUserKeys();
     return;
   }
 
@@ -408,7 +408,7 @@ function updateShell() {
     <div>${summary.clients.length} clients</div>
     <div>${summary.models.length} models</div>
     <div>${(summary.clientKeys || []).length} client keys</div>
-    <div>${(summary.apiKeys || []).length} API keys</div>
+    <div>${(summary.userKeys || []).length} user keys</div>
     <div>${(summary.groups || []).length} groups</div>
     <div>${formatDate(summary.generatedAtUtc)}</div>
   `);
@@ -708,22 +708,22 @@ async function runModelCommand(clientId, model, action) {
   await refreshAfterModelCommand(model, clientId);
 }
 
-function renderApiKeys() {
-  const keys = state.summary?.apiKeys || [];
-  pageTitle.textContent = "API Keys";
+function renderUserKeys() {
+  const keys = state.summary?.userKeys || [];
+  pageTitle.textContent = "User Keys";
   pageSubtitle.textContent = "Keys accepted by the proxy token header, bearer auth, query token, and token path.";
 
   patchContent(`
     ${state.newKey ? newKeyPanel(state.newKey) : ""}
     <div class="panel">
       <div class="panel-header">
-        <h2>Create API key</h2>
+        <h2>Create user key</h2>
       </div>
       <div class="panel-body">
-        <form class="form-row" data-form="api-key">
+        <form class="form-row" data-form="user-key">
           <div class="field">
-            <label for="apiKeyName">Name</label>
-            <input class="input" id="apiKeyName" name="name" placeholder="e.g. openwebui_prod" required>
+            <label for="userKeyName">Name</label>
+            <input class="input" id="userKeyName" name="name" placeholder="e.g. openwebui_prod" required>
           </div>
           <button class="button" type="submit">Create</button>
         </form>
@@ -731,11 +731,11 @@ function renderApiKeys() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>API keys</h2>
+        <h2>User keys</h2>
         <span class="badge">${keys.length} total</span>
       </div>
       <div class="table-wrap">
-        ${keys.length ? apiKeysTable(keys) : emptyState("No API keys have been created.")}
+        ${keys.length ? userKeysTable(keys) : emptyState("No user keys have been created.")}
       </div>
     </div>
   `);
@@ -777,7 +777,7 @@ function renderClientKeys() {
 function newKeyPanel(key) {
   return `
     <div class="new-key">
-      <strong>New API key</strong>
+      <strong>New user key</strong>
       <code>${escapeHtml(key.key)}</code>
       <div class="actions">
         <button class="button secondary" type="button" data-action="copy-key" data-key="${escapeAttr(key.key)}">Copy</button>
@@ -786,7 +786,7 @@ function newKeyPanel(key) {
   `;
 }
 
-function apiKeysTable(keys) {
+function userKeysTable(keys) {
   const rows = keys.map((key) => `
     <tr>
       <td>
@@ -849,7 +849,7 @@ function clientKeysTable(keys) {
 function renderGroups() {
   const groups = state.summary?.groups || [];
   pageTitle.textContent = "Groups";
-  pageSubtitle.textContent = "Manage access groups that control which clients and models API keys can reach.";
+  pageSubtitle.textContent = "Manage access groups that control which clients and models user keys can reach.";
 
   patchContent(`
     <div class="panel">
@@ -916,17 +916,17 @@ async function loadGroupDetail(groupId, showLoading = true) {
   }
 
   try {
-    const [group, clients, apiKeyGroups, billing, rules, payments, balance] = await Promise.all([
+    const [group, clients, userKeyGroups, billing, rules, payments, balance] = await Promise.all([
       api(`/groups/${encodeURIComponent(groupId)}`),
       api(`/groups/${encodeURIComponent(groupId)}/clients`),
-      api("/api-keys/groups"),
+      api("/user-keys/groups"),
       api(`/groups/${encodeURIComponent(groupId)}/billing`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/rules`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/payments`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/balance`)
     ]);
 
-    state.groupDetail = { group, clients, apiKeyGroups, billing, rules, payments, balance };
+    state.groupDetail = { group, clients, userKeyGroups, billing, rules, payments, balance };
     renderGroupDetail();
   } catch (error) {
     patchContent(`<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`);
@@ -934,12 +934,12 @@ async function loadGroupDetail(groupId, showLoading = true) {
 }
 
 function renderGroupDetail() {
-  const { group, clients, apiKeyGroups, billing, rules, payments, balance } = state.groupDetail;
-  const allApiKeys = state.summary?.apiKeys || [];
+  const { group, clients, userKeyGroups, billing, rules, payments, balance } = state.groupDetail;
+  const allUserKeys = state.summary?.userKeys || [];
   const assignedKeyIds = new Set(
-    apiKeyGroups
-      .filter((akg) => akg.apiKeyId && (akg.groupIds || []).includes(group.id))
-      .map((akg) => akg.apiKeyId)
+    userKeyGroups
+      .filter((akg) => akg.userKeyId && (akg.groupIds || []).includes(group.id))
+      .map((akg) => akg.userKeyId)
   );
 
   pageTitle.textContent = "Group Detail";
@@ -997,10 +997,10 @@ function renderGroupDetail() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>API key assignments</h2>
+        <h2>User key assignments</h2>
       </div>
       <div class="table-wrap">
-        ${allApiKeys.length ? apiKeyAssignmentTable(allApiKeys, group.id, assignedKeyIds) : emptyState("No API keys have been created.")}
+        ${allUserKeys.length ? userKeyAssignmentTable(allUserKeys, group.id, assignedKeyIds) : emptyState("No user keys have been created.")}
       </div>
     </div>
     <div class="panel">
@@ -1138,8 +1138,8 @@ function groupClientsTable(clients, groupId) {
   `;
 }
 
-function apiKeyAssignmentTable(apiKeys, groupId, assignedKeyIds) {
-  const rows = apiKeys.map((key) => {
+function userKeyAssignmentTable(userKeys, groupId, assignedKeyIds) {
+  const rows = userKeys.map((key) => {
     const isAssigned = assignedKeyIds.has(key.id);
     return `
       <tr>
@@ -1162,7 +1162,7 @@ function apiKeyAssignmentTable(apiKeys, groupId, assignedKeyIds) {
     <table>
       <thead>
         <tr>
-          <th>API Key</th>
+          <th>User key</th>
           <th></th>
         </tr>
       </thead>
@@ -1171,11 +1171,11 @@ function apiKeyAssignmentTable(apiKeys, groupId, assignedKeyIds) {
   `;
 }
 
-async function toggleApiKeyAssignment(groupId, keyId, currentlyAssigned) {
-  const apiKeyGroups = state.groupDetail?.apiKeyGroups || [];
-  const allApiKeys = state.summary?.apiKeys || [];
+async function toggleUserKeyAssignment(groupId, keyId, currentlyAssigned) {
+  const userKeyGroups = state.groupDetail?.userKeyGroups || [];
+  const allUserKeys = state.summary?.userKeys || [];
 
-  const keyGroups = apiKeyGroups.find((akg) => akg.apiKeyId === keyId);
+  const keyGroups = userKeyGroups.find((ukg) => ukg.userKeyId === keyId);
   const currentGroupIds = keyGroups ? [...keyGroups.groupIds] : [];
 
   let newGroupIds;
@@ -1185,12 +1185,12 @@ async function toggleApiKeyAssignment(groupId, keyId, currentlyAssigned) {
     newGroupIds = [...currentGroupIds, groupId];
   }
 
-  await api(`/api-keys/${encodeURIComponent(keyId)}/groups`, {
+  await api(`/user-keys/${encodeURIComponent(keyId)}/groups`, {
     method: "PUT",
     body: { groupIds: newGroupIds }
   });
 
-  setNotice(currentlyAssigned ? "API key unassigned from group." : "API key assigned to group.");
+  setNotice(currentlyAssigned ? "User key unassigned from group." : "User key assigned to group.");
   await loadGroupDetail(groupId);
 }
 
@@ -1286,7 +1286,7 @@ function renderUsage() {
 
   const byModel = usage.byModel || [];
   const byClient = usage.byClient || [];
-  const byApiKey = usage.byApiKey || [];
+  const byUserKey = usage.byUserKey || [];
   const byGroup = usage.byGroup || [];
   const clientRevenue = revenue || [];
 
@@ -1316,11 +1316,11 @@ function renderUsage() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>Tokens by API key</h2>
-        <span class="badge">${byApiKey.length} keys</span>
+        <h2>Tokens by user key</h2>
+        <span class="badge">${byUserKey.length} keys</span>
       </div>
       <div class="table-wrap">
-        ${byApiKey.length ? tokenStatsApiKeyTable(byApiKey) : emptyState("No token data yet.")}
+        ${byUserKey.length ? tokenStatsUserKeyTable(byUserKey) : emptyState("No token data yet.")}
       </div>
     </div>
     <div class="panel">
@@ -1393,12 +1393,12 @@ function tokenStatsClientTable(stats, revenueMap) {
   `;
 }
 
-function tokenStatsApiKeyTable(stats) {
+function tokenStatsUserKeyTable(stats) {
   const rows = stats.map((s) => `
     <tr>
       <td>
-        <div class="cell-main">${escapeHtml(s.apiKeyName)}</div>
-        <div class="cell-sub">${escapeHtml(s.apiKeyPrefix)}...</div>
+        <div class="cell-main">${escapeHtml(s.userKeyName)}</div>
+        <div class="cell-sub">${escapeHtml(s.userKeyPrefix)}...</div>
       </td>
       <td>${number(s.promptTokens)}</td>
       <td>${number(s.completionTokens)}</td>
@@ -1411,7 +1411,7 @@ function tokenStatsApiKeyTable(stats) {
     <table>
       <thead>
         <tr>
-          <th>API key</th>
+          <th>User key</th>
           <th>Prompt tokens</th>
           <th>Completion tokens</th>
           <th>Total tokens</th>

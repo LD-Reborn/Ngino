@@ -19,7 +19,7 @@ internal static class TokenAuthentication
         {
             foreach (var value in headerValues)
             {
-                var result = AuthorizeApiToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                var result = AuthorizeUserToken(value, settings, managementStore, updateUserKeyLastUsed: true);
                 if (result.IsAuthorized)
                 {
                     return result;
@@ -33,7 +33,7 @@ internal static class TokenAuthentication
             {
                 if (TryGetBearerToken(value, out var bearerToken))
                 {
-                    var result = AuthorizeApiToken(bearerToken, settings, managementStore, updateApiKeyLastUsed: true);
+                    var result = AuthorizeUserToken(bearerToken, settings, managementStore, updateUserKeyLastUsed: true);
                     if (result.IsAuthorized)
                     {
                         return result;
@@ -48,7 +48,7 @@ internal static class TokenAuthentication
         if (allowPathToken
             && TryGetPathToken(request.Path, out var pathToken, out _))
         {
-            var result = AuthorizeApiToken(pathToken, settings, managementStore, updateApiKeyLastUsed: true);
+            var result = AuthorizeUserToken(pathToken, settings, managementStore, updateUserKeyLastUsed: true);
             if (result.IsAuthorized)
             {
                 return result;
@@ -63,7 +63,7 @@ internal static class TokenAuthentication
         {
             foreach (var value in queryValues)
             {
-                var result = AuthorizeApiToken(value, settings, managementStore, updateApiKeyLastUsed: true);
+                var result = AuthorizeUserToken(value, settings, managementStore, updateUserKeyLastUsed: true);
                 if (result.IsAuthorized)
                 {
                     return result;
@@ -159,7 +159,7 @@ internal static class TokenAuthentication
         remainingPath = path;
 
         if (!TryGetPathToken(path, out var pathToken, out var tokenRemainingPath)
-            || !IsApiTokenAuthorized(pathToken, settings, managementStore, updateApiKeyLastUsed: false))
+            || !IsUserTokenAuthorized(pathToken, settings, managementStore, updateUserKeyLastUsed: false))
         {
             return false;
         }
@@ -172,13 +172,13 @@ internal static class TokenAuthentication
 
     public static bool IsOwnBearerValue(string? value, ServerSettings settings, ManagementStore managementStore) =>
         TryGetBearerToken(value, out var token)
-        && IsApiTokenAuthorized(token, settings, managementStore, updateApiKeyLastUsed: false);
+        && IsUserTokenAuthorized(token, settings, managementStore, updateUserKeyLastUsed: false);
 
-    private static AuthResult AuthorizeApiToken(
+    private static AuthResult AuthorizeUserToken(
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
-        bool updateApiKeyLastUsed)
+        bool updateUserKeyLastUsed)
     {
         if (string.IsNullOrWhiteSpace(token))
         {
@@ -193,11 +193,11 @@ internal static class TokenAuthentication
             return AuthResult.Success(null);
         }
 
-        var apiKeyId = managementStore.GetApiKeyId(token);
-        if (apiKeyId is not null)
+        var userKeyId = managementStore.GetUserKeyId(token);
+        if (userKeyId is not null)
         {
-            managementStore.IsApiKeyValid(token, updateApiKeyLastUsed);
-            return AuthResult.Success(apiKeyId);
+            managementStore.IsUserKeyValid(token, updateUserKeyLastUsed);
+            return AuthResult.Success(userKeyId);
         }
 
         return AuthResult.Failure;
@@ -236,15 +236,15 @@ internal static class TokenAuthentication
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
-        bool updateApiKeyLastUsed) =>
-        AuthorizeApiToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
+        bool updateUserKeyLastUsed) =>
+        AuthorizeUserToken(token, settings, managementStore, updateUserKeyLastUsed).IsAuthorized;
 
-    private static bool IsApiTokenAuthorized(
+    private static bool IsUserTokenAuthorized(
         string? token,
         ServerSettings settings,
         ManagementStore managementStore,
-        bool updateApiKeyLastUsed) =>
-        AuthorizeApiToken(token, settings, managementStore, updateApiKeyLastUsed).IsAuthorized;
+        bool updateUserKeyLastUsed) =>
+        AuthorizeUserToken(token, settings, managementStore, updateUserKeyLastUsed).IsAuthorized;
 
     private static bool TryGetBearerToken(string? authorization, out string token)
     {
@@ -297,15 +297,15 @@ internal sealed class AuthResult
 {
     public static AuthResult Failure { get; } = new(false, null);
 
-    public static AuthResult Success(string? apiKeyId) => new(true, apiKeyId);
+    public static AuthResult Success(string? userKeyId) => new(true, userKeyId);
 
     public bool IsAuthorized { get; }
 
-    public string? ApiKeyId { get; }
+    public string? UserKeyId { get; }
 
-    private AuthResult(bool isAuthorized, string? apiKeyId)
+    private AuthResult(bool isAuthorized, string? userKeyId)
     {
         IsAuthorized = isAuthorized;
-        ApiKeyId = apiKeyId;
+        UserKeyId = userKeyId;
     }
 }

@@ -44,7 +44,7 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var billingCheck = managementStore.CheckBalanceForApiKey(auth.ApiKeyId);
+        var billingCheck = managementStore.CheckBalanceForUserKey(auth.UserKeyId);
         if (!billingCheck.Allowed)
         {
             context.Response.StatusCode = StatusCodes.Status402PaymentRequired;
@@ -58,7 +58,7 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var groupAccess = ResolveGroupAccess(auth.ApiKeyId, managementStore);
+        var groupAccess = ResolveGroupAccess(auth.UserKeyId, managementStore);
 
         var pathTokenRemoved = TokenAuthentication.TryRemovePathToken(context.Request.Path, settings, managementStore, out var proxyPath);
         if (!pathTokenRemoved)
@@ -92,7 +92,7 @@ internal static class ReverseProxyEndpoint
                 embeddingCache,
                 managementStore,
                 groupAccess,
-                auth.ApiKeyId);
+                auth.UserKeyId);
             return;
         }
 
@@ -141,7 +141,7 @@ internal static class ReverseProxyEndpoint
             embeddingCache,
             embeddingRequest,
             managementStore,
-            auth.ApiKeyId);
+            auth.UserKeyId);
     }
 
     public static async Task HandleClientAsync(
@@ -162,7 +162,7 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var billingCheck = managementStore.CheckBalanceForApiKey(auth.ApiKeyId);
+        var billingCheck = managementStore.CheckBalanceForUserKey(auth.UserKeyId);
         if (!billingCheck.Allowed)
         {
             context.Response.StatusCode = StatusCodes.Status402PaymentRequired;
@@ -176,7 +176,7 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var groupAccess = ResolveGroupAccess(auth.ApiKeyId, managementStore);
+        var groupAccess = ResolveGroupAccess(auth.UserKeyId, managementStore);
         if (!groupAccess.IsClientAllowed(clientId))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -197,7 +197,7 @@ internal static class ReverseProxyEndpoint
             embeddingCache,
             managementStore,
             groupAccess,
-            auth.ApiKeyId);
+            auth.UserKeyId);
     }
 
     private static async Task ForwardToClientAsync(
@@ -211,7 +211,7 @@ internal static class ReverseProxyEndpoint
         EmbeddingCache embeddingCache,
         ManagementStore managementStore,
         GroupAccess? groupAccess = null,
-        string? apiKeyId = null)
+        string? userKeyId = null)
     {
         var clientAccess = managementStore.GetClientAccess(clientId);
         if (clientAccess.IsDisabled)
@@ -254,7 +254,7 @@ internal static class ReverseProxyEndpoint
             embeddingCache,
             embeddingRequest,
             managementStore,
-            apiKeyId);
+            userKeyId);
     }
 
     private static bool IsRootPath(PathString path) =>
@@ -303,14 +303,14 @@ internal static class ReverseProxyEndpoint
         return true;
     }
 
-    private static GroupAccess ResolveGroupAccess(string? apiKeyId, ManagementStore managementStore)
+    private static GroupAccess ResolveGroupAccess(string? userKeyId, ManagementStore managementStore)
     {
-        if (string.IsNullOrWhiteSpace(apiKeyId))
+        if (string.IsNullOrWhiteSpace(userKeyId))
         {
             return GroupAccess.Unrestricted;
         }
 
-        return managementStore.ResolveGroupAccess(apiKeyId);
+        return managementStore.ResolveGroupAccess(userKeyId);
     }
 
     private static bool IsTagsRequest(HttpRequest request, PathString proxyPath) =>
@@ -499,7 +499,7 @@ internal static class ReverseProxyEndpoint
         EmbeddingCache embeddingCache,
         EmbeddingCacheRequest? embeddingRequest,
         ManagementStore managementStore,
-        string? apiKeyId = null)
+        string? userKeyId = null)
     {
         var logger = loggerFactory.CreateLogger("ReverseLlama.Server.ReverseProxy");
         var requestId = Guid.NewGuid().ToString("n");
@@ -593,9 +593,9 @@ internal static class ReverseProxyEndpoint
             var tokenCounts = tokenCounter.CountTokens();
 
             var cost = 0.0;
-            if (!string.IsNullOrWhiteSpace(apiKeyId) && tokenCounts.TotalTokens > 0)
+            if (!string.IsNullOrWhiteSpace(userKeyId) && tokenCounts.TotalTokens > 0)
             {
-                var billing = managementStore.ResolveBillingForApiKey(apiKeyId);
+                var billing = managementStore.ResolveBillingForUserKey(userKeyId);
                 if (billing is not null)
                 {
                     cost = managementStore.CalculateCost(billing.GroupId, requestedModel, tokenCounts.TotalTokens);
@@ -611,7 +611,7 @@ internal static class ReverseProxyEndpoint
                 tokenCounts.PromptTokens,
                 tokenCounts.CompletionTokens,
                 tokenCounts.TotalTokens,
-                apiKeyId,
+                userKeyId,
                 cost,
                 startedAt,
                 completedAt,

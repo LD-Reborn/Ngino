@@ -35,7 +35,7 @@ if (settings.Keycloak.IsConfigured)
         {
             options.Cookie.Name = "ReverseLlama.Admin";
             options.Cookie.SameSite = SameSiteMode.Lax;
-            options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.Cookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
             options.LoginPath = "/admin/login";
             options.LogoutPath = "/admin/logout";
         })
@@ -50,9 +50,9 @@ if (settings.Keycloak.IsConfigured)
             options.SaveTokens = true;
             options.GetClaimsFromUserInfoEndpoint = true;
             options.CorrelationCookie.SameSite = SameSiteMode.Lax;
-            options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.CorrelationCookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
             options.NonceCookie.SameSite = SameSiteMode.Lax;
-            options.NonceCookie.SecurePolicy = CookieSecurePolicy.Always;
+            options.NonceCookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
             options.Scope.Clear();
             options.Scope.Add("openid");
             options.Scope.Add("profile");
@@ -105,7 +105,7 @@ if (!settings.Keycloak.IsConfigured)
     {
         options.Cookie.Name = "ReverseLlama.Admin";
         options.Cookie.SameSite = SameSiteMode.Lax;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
         options.LoginPath = "/admin/login";
         options.LogoutPath = "/admin/logout";
         options.AccessDeniedPath = "/admin/login";
