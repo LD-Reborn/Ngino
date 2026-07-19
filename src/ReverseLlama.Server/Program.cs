@@ -159,6 +159,8 @@ var managementStore = app.Services.GetRequiredService<ManagementStore>();
 var tunnelHub = app.Services.GetRequiredService<TunnelHub>();
 managementStore.SetConnectedClientProvider(() => tunnelHub.ClientSnapshots.Select(c => c.Id));
 
+app.UseCors();
+
 if (settings.Keycloak.IsConfigured)
 {
     app.UseAuthentication();
@@ -178,8 +180,6 @@ if (!settings.Keycloak.IsConfigured)
 app.UseAntiforgery();
 
 app.UseElmah();
-
-app.UseCors();
 
 app.Use(async (context, next) =>
 {

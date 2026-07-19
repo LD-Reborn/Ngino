@@ -94,6 +94,13 @@ internal sealed class ServerSettings
 
     private static string[] ReadStringArray(IConfiguration configuration, params string[] keys)
     {
+        var section = configuration.GetSection(keys[0]);
+        var children = section.GetChildren().ToList();
+        if (children.Count > 0)
+        {
+            return children.Select(c => c.Value!).Where(v => !string.IsNullOrWhiteSpace(v)).ToArray();
+        }
+
         var value = Read(configuration, keys);
         if (string.IsNullOrWhiteSpace(value))
         {
