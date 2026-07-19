@@ -264,6 +264,8 @@ app.UseWebSockets(new WebSocketOptions
     KeepAliveInterval = TimeSpan.FromSeconds(30)
 });
 
+app.UseStaticFiles();
+
 app.MapAdminEndpoints(settings);
 
 app.MapGet("/", () => Results.Redirect("/admin"));
