@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-DEFAULT_INSTALL_DIR="/opt/reversellama-client"
-DEFAULT_SERVICE_NAME="reversellama-client"
+DEFAULT_INSTALL_DIR="/opt/ngino-client"
+DEFAULT_SERVICE_NAME="ngino-client"
 DEFAULT_UPSTREAM="http://localhost:11434"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -239,7 +239,7 @@ case "$ARCH" in
 esac
 
 info "Building ReverseLlama client (self-contained, $DOTNET_RID)..."
-BUILD_DIR="$(mktemp -d /tmp/reversellama-build.XXXXXX)"
+BUILD_DIR="$(mktemp -d /tmp/ngino-build.XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
 "$DOTNET_CMD" publish "$CLIENT_SRC/ReverseLlama.Client.csproj" \
@@ -263,7 +263,7 @@ chmod +x "$INSTALL_DIR/ReverseLlama.Client"
 info "Client installed to $INSTALL_DIR."
 
 # ── Write environment file (avoids shell injection in unit file) ─────────────
-ENV_DIR="/etc/reversellama-client"
+ENV_DIR="/etc/ngino-client"
 mkdir -p "$ENV_DIR"
 printf 'REVERSE_LLAMA_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/env"
 chmod 600 "$ENV_DIR/env"
