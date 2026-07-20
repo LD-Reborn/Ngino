@@ -79,13 +79,13 @@ curl.exe -H "X-Ngino-Token: change-me" `
 
 Server options:
 
-- `--token <value>` or `REVERSE_LLAMA_TOKEN`: optional shared token. If set, proxy calls must authenticate with `X-Ngino-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix.
+- `--token <value>` or `NGINO_TOKEN`: optional shared token. If set, proxy calls must authenticate with `X-Ngino-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix.
 - `--tunnel-path <path>`: defaults to `/_ngino/tunnel`.
 - `--status-path <path>`: defaults to `/_ngino/status`.
-- `--chunk-size <bytes>` or `REVERSE_LLAMA_CHUNK_SIZE`: defaults to `65536`.
-- `--embedding-cache-path <path>` or `REVERSE_LLAMA_EMBEDDING_CACHE_PATH`: SQLite cache file for embedding vectors. Defaults to `App_Data\embedding-cache.sqlite` under the server app directory.
-- `--management-database-path <path>` or `REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH`: SQLite database for admin user keys, client keys, client disable state, and request/model metrics. Defaults to `App_Data\management.sqlite` under the server app directory.
-- `--secure-cookies` or `REVERSE_LLAMA_SECURE_COOKIES`: set to `false` to allow admin auth cookies over plain HTTP (for local development). Defaults to `true`.
+- `--chunk-size <bytes>` or `NGINO_CHUNK_SIZE`: defaults to `65536`.
+- `--embedding-cache-path <path>` or `NGINO_EMBEDDING_CACHE_PATH`: SQLite cache file for embedding vectors. Defaults to `App_Data\embedding-cache.sqlite` under the server app directory.
+- `--management-database-path <path>` or `NGINO_MANAGEMENT_DATABASE_PATH`: SQLite database for admin user keys, client keys, client disable state, and request/model metrics. Defaults to `App_Data\management.sqlite` under the server app directory.
+- `--secure-cookies` or `NGINO_SECURE_COOKIES`: set to `false` to allow admin auth cookies over plain HTTP (for local development). Defaults to `true`.
 
 Admin UI:
 
@@ -96,13 +96,13 @@ Admin UI:
 
 Client options:
 
-- `--server <url>` or `REVERSE_LLAMA_SERVER`: server base URL, for example `http://your-server:5050`.
-- `--upstream <url>` or `REVERSE_LLAMA_UPSTREAM`: local Ollama URL, defaults to `http://localhost:11434`.
-- `--token <value>` or `REVERSE_LLAMA_TOKEN`: optional shared token.
-- `--client-id <name>` or `REVERSE_LLAMA_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
-- `--tunnel-path <path>` or `REVERSE_LLAMA_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.
-- `--reconnect-delay <seconds>` or `REVERSE_LLAMA_RECONNECT_DELAY_SECONDS`: defaults to `5`.
-- `--chunk-size <bytes>` or `REVERSE_LLAMA_CHUNK_SIZE`: defaults to `65536`.
+- `--server <url>` or `NGINO_SERVER`: server base URL, for example `http://your-server:5050`.
+- `--upstream <url>` or `NGINO_UPSTREAM`: local Ollama URL, defaults to `http://localhost:11434`.
+- `--token <value>` or `NGINO_TOKEN`: optional shared token.
+- `--client-id <name>` or `NGINO_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
+- `--tunnel-path <path>` or `NGINO_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.
+- `--reconnect-delay <seconds>` or `NGINO_RECONNECT_DELAY_SECONDS`: defaults to `5`.
+- `--chunk-size <bytes>` or `NGINO_CHUNK_SIZE`: defaults to `65536`.
 
 The token is accepted as `X-Ngino-Token`, as `Authorization: Bearer <token>`, or as a path prefix like `/token/<token>/api/tags` or `/token/<token>/clients/{id}/v1`. The Bearer form lets OpenAI-compatible clients (e.g. n8n's OpenAI nodes pointed at `/clients/{id}/v1`) authenticate with their API-key field. The path-token form is useful for clients that cannot send custom headers. The server strips its own token header/Bearer value and removes the path prefix before forwarding; any other `Authorization` value is forwarded untouched.
 

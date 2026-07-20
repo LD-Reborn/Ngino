@@ -265,7 +265,7 @@ info "Client installed to $INSTALL_DIR."
 # ── Write environment file (avoids shell injection in unit file) ─────────────
 ENV_DIR="/etc/ngino-client"
 mkdir -p "$ENV_DIR"
-printf 'REVERSE_LLAMA_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/env"
+printf 'NGINO_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/env"
 chmod 600 "$ENV_DIR/env"
 info "Environment file written to $ENV_DIR/env (mode 0600)."
 

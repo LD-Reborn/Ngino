@@ -47,13 +47,13 @@ internal sealed class ClientOptions
 
         return new ClientOptions
         {
-            Server = ReadUri(values, "server", "REVERSE_LLAMA_SERVER", "http://localhost:5001"),
-            Upstream = ReadUri(values, "upstream", "REVERSE_LLAMA_UPSTREAM", "http://localhost:11434"),
-            TunnelPath = NormalizePath(Read(values, "tunnel-path", "REVERSE_LLAMA_TUNNEL_PATH") ?? ProtocolConstants.DefaultTunnelPath),
-            Token = Read(values, "token", "REVERSE_LLAMA_TOKEN"),
-            ClientId = Read(values, "client-id", "REVERSE_LLAMA_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
-            ReconnectDelay = TimeSpan.FromSeconds(ReadInt(values, 5, "reconnect-delay", "REVERSE_LLAMA_RECONNECT_DELAY_SECONDS")),
-            ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "REVERSE_LLAMA_CHUNK_SIZE")
+            Server = ReadUri(values, "server", "NGINO_SERVER", "http://localhost:5001"),
+            Upstream = ReadUri(values, "upstream", "NGINO_UPSTREAM", "http://localhost:11434"),
+            TunnelPath = NormalizePath(Read(values, "tunnel-path", "NGINO_TUNNEL_PATH") ?? ProtocolConstants.DefaultTunnelPath),
+            Token = Read(values, "token", "NGINO_TOKEN"),
+            ClientId = Read(values, "client-id", "NGINO_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
+            ReconnectDelay = TimeSpan.FromSeconds(ReadInt(values, 5, "reconnect-delay", "NGINO_RECONNECT_DELAY_SECONDS")),
+            ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "NGINO_CHUNK_SIZE")
         };
     }
 

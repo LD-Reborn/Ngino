@@ -31,30 +31,30 @@ internal sealed class ServerSettings
         {
             StatusPath = NormalizePath(Read(configuration, "Ngino:StatusPath", "status-path") ?? ProtocolConstants.DefaultStatusPath),
             TunnelPath = NormalizePath(Read(configuration, "Ngino:TunnelPath", "tunnel-path") ?? ProtocolConstants.DefaultTunnelPath),
-            Token = Read(configuration, "Ngino:Token", "token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_TOKEN"),
-            ClientToken = Read(configuration, "Ngino:ClientToken", "client-token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_CLIENT_TOKEN"),
-            ChunkSize = ReadInt(configuration, 64 * 1024, "Ngino:ChunkSize", "chunk-size", "REVERSE_LLAMA_CHUNK_SIZE"),
+            Token = Read(configuration, "Ngino:Token", "token") ?? Environment.GetEnvironmentVariable("NGINO_TOKEN"),
+            ClientToken = Read(configuration, "Ngino:ClientToken", "client-token") ?? Environment.GetEnvironmentVariable("NGINO_CLIENT_TOKEN"),
+            ChunkSize = ReadInt(configuration, 64 * 1024, "Ngino:ChunkSize", "chunk-size", "NGINO_CHUNK_SIZE"),
             EmbeddingCachePath = Read(
                 configuration,
                 "Ngino:EmbeddingCachePath",
                 "embedding-cache-path",
-                "REVERSE_LLAMA_EMBEDDING_CACHE_PATH"),
+                "NGINO_EMBEDDING_CACHE_PATH"),
             ManagementDatabasePath = Read(
                 configuration,
                 "Ngino:ManagementDatabasePath",
                 "management-database-path",
-                "REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH"),
-            SecureCookies = ReadBool(configuration, true, "Ngino:SecureCookies", "secure-cookies", "REVERSE_LLAMA_SECURE_COOKIES"),
+                "NGINO_MANAGEMENT_DATABASE_PATH"),
+            SecureCookies = ReadBool(configuration, true, "Ngino:SecureCookies", "secure-cookies", "NGINO_SECURE_COOKIES"),
             Keycloak = new KeycloakSettings
             {
-                Authority = Read(configuration, "Authentication:Keycloak:Authority", "REVERSE_LLAMA_KEYCLOAK_AUTHORITY"),
-                ClientId = Read(configuration, "Authentication:Keycloak:ClientId", "REVERSE_LLAMA_KEYCLOAK_CLIENT_ID"),
-                ClientSecret = Read(configuration, "Authentication:Keycloak:ClientSecret", "REVERSE_LLAMA_KEYCLOAK_CLIENT_SECRET"),
+                Authority = Read(configuration, "Authentication:Keycloak:Authority", "NGINO_KEYCLOAK_AUTHORITY"),
+                ClientId = Read(configuration, "Authentication:Keycloak:ClientId", "NGINO_KEYCLOAK_CLIENT_ID"),
+                ClientSecret = Read(configuration, "Authentication:Keycloak:ClientSecret", "NGINO_KEYCLOAK_CLIENT_SECRET"),
                 RequireHttpsMetadata = ReadBool(
                     configuration,
                     true,
                     "Authentication:Keycloak:RequireHttpsMetadata",
-                    "REVERSE_LLAMA_KEYCLOAK_REQUIRE_HTTPS_METADATA")
+                    "NGINO_KEYCLOAK_REQUIRE_HTTPS_METADATA")
             },
             Cors = new CorsSettings
             {
