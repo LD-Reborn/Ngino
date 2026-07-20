@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
-using ReverseLlama.Server.Models;
+using Ngino.Server.Models;
 
-namespace ReverseLlama.Server.Data;
+namespace Ngino.Server.Data;
 
 internal sealed class ApplicationDbContext : IdentityDbContext<ApplicationUser>
 {

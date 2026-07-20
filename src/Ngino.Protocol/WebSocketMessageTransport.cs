@@ -1,7 +1,7 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 
-namespace ReverseLlama.Protocol;
+namespace Ngino.Protocol;
 
 public static class WebSocketMessageTransport
 {

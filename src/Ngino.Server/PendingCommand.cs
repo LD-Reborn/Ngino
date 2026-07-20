@@ -1,6 +1,6 @@
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class PendingCommand
 {

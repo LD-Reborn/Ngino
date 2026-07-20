@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\ReverseLlama.Client\ReverseLlama.Client.csproj" />
+    <ProjectReference Include="..\..\src\Ngino.Client\Ngino.Client.csproj" />
   </ItemGroup>
 
 </Project>

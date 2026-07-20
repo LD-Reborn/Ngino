@@ -2,13 +2,13 @@ using System.Text.Json;
 using ElmahCore;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Primitives;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal static class ReverseProxyEndpoint
 {
-    private const string UnauthorizedMessage = "Missing or invalid ReverseLlama token.";
+    private const string UnauthorizedMessage = "Missing or invalid Ngino token.";
 
     private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -501,7 +501,7 @@ internal static class ReverseProxyEndpoint
         ManagementStore managementStore,
         string? userKeyId = null)
     {
-        var logger = loggerFactory.CreateLogger("ReverseLlama.Server.ReverseProxy");
+        var logger = loggerFactory.CreateLogger("Ngino.Server.ReverseProxy");
         var requestId = Guid.NewGuid().ToString("n");
         var pending = connection.RegisterPending(requestId);
         var startedAt = DateTimeOffset.UtcNow;

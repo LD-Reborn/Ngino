@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using ElmahCore;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class AuthRateLimiter
 {

@@ -1,4 +1,4 @@
-namespace ReverseLlama.Protocol;
+namespace Ngino.Protocol;
 
 public static class TunnelMessageTypes
 {

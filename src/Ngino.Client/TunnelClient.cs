@@ -4,16 +4,16 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Client;
+namespace Ngino.Client;
 
 internal sealed class TunnelClient
 {
     private static readonly TimeSpan ModelRefreshInterval = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ModelRefreshTimeout = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private const string EmbeddingWarmupInput = "ReverseLlama warmup";
+    private const string EmbeddingWarmupInput = "Ngino warmup";
 
     private readonly ConcurrentDictionary<string, UpstreamRequest> _activeRequests = new();
     private readonly HttpClient _httpClient;

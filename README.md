@@ -62,14 +62,14 @@ dotnet run --project src/Ngino.Client -- --server http://your-server:5050 --upst
 Call Ollama through the server. Model-bearing requests on the root path are routed to a connected client that reports that model, preferring the client with the fewest in-flight requests. You can still address one client explicitly by id:
 
 ```powershell
-curl.exe -H "X-Reverse-Llama-Token: change-me" http://your-server:5050/api/tags
-curl.exe -H "X-Reverse-Llama-Token: change-me" http://your-server:5050/clients/gpu-01/api/tags
+curl.exe -H "X-Ngino-Token: change-me" http://your-server:5050/api/tags
+curl.exe -H "X-Ngino-Token: change-me" http://your-server:5050/clients/gpu-01/api/tags
 curl.exe http://your-server:5050/token/change-me/api/tags
 curl.exe http://your-server:5050/token/change-me/clients/gpu-01/api/tags
 ```
 
 ```powershell
-curl.exe -H "X-Reverse-Llama-Token: change-me" `
+curl.exe -H "X-Ngino-Token: change-me" `
   -H "Content-Type: application/json" `
   -d '{"model":"llama3.1","prompt":"hello"}' `
   http://your-server:5050/api/generate
@@ -79,9 +79,9 @@ curl.exe -H "X-Reverse-Llama-Token: change-me" `
 
 Server options:
 
-- `--token <value>` or `REVERSE_LLAMA_TOKEN`: optional shared token. If set, proxy calls must authenticate with `X-Reverse-Llama-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix.
-- `--tunnel-path <path>`: defaults to `/_reverse-llama/tunnel`.
-- `--status-path <path>`: defaults to `/_reverse-llama/status`.
+- `--token <value>` or `REVERSE_LLAMA_TOKEN`: optional shared token. If set, proxy calls must authenticate with `X-Ngino-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix.
+- `--tunnel-path <path>`: defaults to `/_ngino/tunnel`.
+- `--status-path <path>`: defaults to `/_ngino/status`.
 - `--chunk-size <bytes>` or `REVERSE_LLAMA_CHUNK_SIZE`: defaults to `65536`.
 - `--embedding-cache-path <path>` or `REVERSE_LLAMA_EMBEDDING_CACHE_PATH`: SQLite cache file for embedding vectors. Defaults to `App_Data\embedding-cache.sqlite` under the server app directory.
 - `--management-database-path <path>` or `REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH`: SQLite database for admin user keys, client keys, client disable state, and request/model metrics. Defaults to `App_Data\management.sqlite` under the server app directory.
@@ -91,7 +91,7 @@ Admin UI:
 
 - `GET /admin` opens the Keycloak-protected management UI.
 - The temporary Keycloak settings live under `Authentication:Keycloak` in `appsettings.json`.
-- User keys created in the UI are accepted anywhere the shared token is accepted: `X-Reverse-Llama-Token`, `Authorization: Bearer <key>`, `?token=...`, and `/token/<key>/...`.
+- User keys created in the UI are accepted anywhere the shared token is accepted: `X-Ngino-Token`, `Authorization: Bearer <key>`, `?token=...`, and `/token/<key>/...`.
 - Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`).
 
 Client options:
@@ -100,11 +100,11 @@ Client options:
 - `--upstream <url>` or `REVERSE_LLAMA_UPSTREAM`: local Ollama URL, defaults to `http://localhost:11434`.
 - `--token <value>` or `REVERSE_LLAMA_TOKEN`: optional shared token.
 - `--client-id <name>` or `REVERSE_LLAMA_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
-- `--tunnel-path <path>` or `REVERSE_LLAMA_TUNNEL_PATH`: defaults to `/_reverse-llama/tunnel`.
+- `--tunnel-path <path>` or `REVERSE_LLAMA_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.
 - `--reconnect-delay <seconds>` or `REVERSE_LLAMA_RECONNECT_DELAY_SECONDS`: defaults to `5`.
 - `--chunk-size <bytes>` or `REVERSE_LLAMA_CHUNK_SIZE`: defaults to `65536`.
 
-The token is accepted as `X-Reverse-Llama-Token`, as `Authorization: Bearer <token>`, or as a path prefix like `/token/<token>/api/tags` or `/token/<token>/clients/{id}/v1`. The Bearer form lets OpenAI-compatible clients (e.g. n8n's OpenAI nodes pointed at `/clients/{id}/v1`) authenticate with their API-key field. The path-token form is useful for clients that cannot send custom headers. The server strips its own token header/Bearer value and removes the path prefix before forwarding; any other `Authorization` value is forwarded untouched.
+The token is accepted as `X-Ngino-Token`, as `Authorization: Bearer <token>`, or as a path prefix like `/token/<token>/api/tags` or `/token/<token>/clients/{id}/v1`. The Bearer form lets OpenAI-compatible clients (e.g. n8n's OpenAI nodes pointed at `/clients/{id}/v1`) authenticate with their API-key field. The path-token form is useful for clients that cannot send custom headers. The server strips its own token header/Bearer value and removes the path prefix before forwarding; any other `Authorization` value is forwarded untouched.
 
 ## Multiple clients
 
@@ -118,7 +118,7 @@ Any number of machines can connect at the same time; each registers under its cl
 
 ## Embedding cache
 
-The server keeps an in-memory KV cache for embedding vectors and persists it to SQLite. The cache key is the requested `model` plus the exact input text. It applies to `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; cache hits return JSON in the same endpoint family shape and include `X-Reverse-Llama-Embedding-Cache: hit`.
+The server keeps an in-memory KV cache for embedding vectors and persists it to SQLite. The cache key is the requested `model` plus the exact input text. It applies to `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; cache hits return JSON in the same endpoint family shape and include `X-Ngino-Embedding-Cache: hit`.
 
 The authenticated status endpoint reports whether the cache is available, plus the cache count and database path. If SQLite cannot be initialized, proxy traffic continues without embedding-cache writes.
 
@@ -141,7 +141,7 @@ The script ensures .NET 10 and Ollama are installed, builds the client self-cont
 ## Security notes
 
 - Use HTTPS or a private network/VPN when exposing this outside a trusted network.
-- **Tokens in URLs** (`/token/<token>/...` and `?token=...`) are logged by web servers (Apache, Nginx, Kestrel), reverse proxies, and browsers (history). Malicious MITM proxies can also read them. Prefer header-based auth (`X-Reverse-Llama-Token` or `Authorization: Bearer`) when your client supports it.
+- **Tokens in URLs** (`/token/<token>/...` and `?token=...`) are logged by web servers (Apache, Nginx, Kestrel), reverse proxies, and browsers (history). Malicious MITM proxies can also read them. Prefer header-based auth (`X-Ngino-Token` or `Authorization: Bearer`) when your client supports it.
 - The token is simple shared-secret protection, not a full access-control system.
 
 ## AI Disclosure

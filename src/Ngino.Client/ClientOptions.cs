@@ -1,6 +1,6 @@
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Client;
+namespace Ngino.Client;
 
 internal sealed class ClientOptions
 {
@@ -59,12 +59,12 @@ internal sealed class ClientOptions
 
     public static string Usage =>
         """
-        ReverseLlama.Client options:
+        Ngino.Client options:
           --server <url>             Server base URL, e.g. http://my-server:5050
           --upstream <url>           Local upstream URL, e.g. http://localhost:11434
           --token <value>            Optional token matching the server
           --client-id <name>         Identifies this machine on the server; defaults to the machine name
-          --tunnel-path <path>       Defaults to /_reverse-llama/tunnel
+          --tunnel-path <path>       Defaults to /_ngino/tunnel
           --reconnect-delay <sec>    Defaults to 5
           --chunk-size <bytes>       Defaults to 65536
         """;

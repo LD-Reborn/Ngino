@@ -2,7 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Xunit;
 
-namespace ReverseLlama.Client.Tests;
+namespace Ngino.Client.Tests;
 
 public sealed class PackageAuditTests
 {
@@ -32,7 +32,7 @@ public sealed class PackageAuditTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            var solutionPath = Path.Combine(directory.FullName, "ReverseLlama.sln");
+            var solutionPath = Path.Combine(directory.FullName, "Ngino.sln");
             if (File.Exists(solutionPath))
             {
                 return solutionPath;
@@ -41,7 +41,7 @@ public sealed class PackageAuditTests
             directory = directory.Parent;
         }
 
-        throw new InvalidOperationException("Could not find ReverseLlama.sln from the test output directory.");
+        throw new InvalidOperationException("Could not find Ngino.sln from the test output directory.");
     }
 
     private static async Task<CommandResult> RunDotnetPackageAuditAsync(string solutionPath)

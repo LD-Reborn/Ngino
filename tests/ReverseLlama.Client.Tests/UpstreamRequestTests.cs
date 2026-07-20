@@ -1,7 +1,7 @@
-using ReverseLlama.Client;
+using Ngino.Client;
 using Xunit;
 
-namespace ReverseLlama.Client.Tests;
+namespace Ngino.Client.Tests;
 
 public sealed class UpstreamRequestTests
 {

@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class ManagementStore
 {

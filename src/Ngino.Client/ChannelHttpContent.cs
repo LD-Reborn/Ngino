@@ -1,7 +1,7 @@
 using System.Net;
 using System.Threading.Channels;
 
-namespace ReverseLlama.Client;
+namespace Ngino.Client;
 
 internal sealed class ChannelHttpContent : HttpContent
 {

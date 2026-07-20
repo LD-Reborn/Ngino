@@ -5,15 +5,15 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReverseLlama.Protocol", "src\ReverseLlama.Protocol\ReverseLlama.Protocol.csproj", "{D85E1D3C-0AC3-4810-8285-16BE903EC8AB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ngino.Protocol", "src\Ngino.Protocol\Ngino.Protocol.csproj", "{D85E1D3C-0AC3-4810-8285-16BE903EC8AB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReverseLlama.Server", "src\ReverseLlama.Server\ReverseLlama.Server.csproj", "{FB853CB0-5AEF-4278-82E7-3C8E506F9DFE}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ngino.Server", "src\Ngino.Server\Ngino.Server.csproj", "{FB853CB0-5AEF-4278-82E7-3C8E506F9DFE}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReverseLlama.Client", "src\ReverseLlama.Client\ReverseLlama.Client.csproj", "{0633EAE6-B82A-4A27-851C-B5D6E11CBE03}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ngino.Client", "src\Ngino.Client\Ngino.Client.csproj", "{0633EAE6-B82A-4A27-851C-B5D6E11CBE03}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReverseLlama.Client.Tests", "tests\ReverseLlama.Client.Tests\ReverseLlama.Client.Tests.csproj", "{B03E7794-2888-4B56-A30F-B6C25BCFB89A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ngino.Client.Tests", "tests\Ngino.Client.Tests\Ngino.Client.Tests.csproj", "{B03E7794-2888-4B56-A30F-B6C25BCFB89A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

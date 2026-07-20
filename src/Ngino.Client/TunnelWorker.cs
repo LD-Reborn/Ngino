@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Hosting;
 
-namespace ReverseLlama.Client;
+namespace Ngino.Client;
 
 internal sealed class TunnelWorker : BackgroundService
 {

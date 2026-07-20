@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Data.Sqlite;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class EmbeddingCache
 {
@@ -121,7 +121,7 @@ internal sealed class EmbeddingCache
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = JsonContentType;
         context.Response.ContentLength = body.Length;
-        context.Response.Headers["X-Reverse-Llama-Embedding-Cache"] = "hit";
+        context.Response.Headers["X-Ngino-Embedding-Cache"] = "hit";
 
         await context.Response.Body.WriteAsync(body, context.RequestAborted);
         return true;

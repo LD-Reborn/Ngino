@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Threading;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class TunnelHub
 {

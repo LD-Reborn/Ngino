@@ -33,10 +33,10 @@ usage() {
     cat <<EOF
 Usage: $0 [OPTIONS]
 
-Installs the ReverseLlama client as a systemd service on Linux.
+Installs the Ngino client as a systemd service on Linux.
 
 Required:
-  --server <url>       ReverseLlama server URL (e.g. http://my-server:5050)
+  --server <url>       Ngino server URL (e.g. http://my-server:5050)
   --token <value>      Shared secret token for the server
 
 Optional:
@@ -71,7 +71,7 @@ done
 
 # ── Prompt for missing required values ───────────────────────────────────────
 if [[ -z "$SERVER_URL" ]]; then
-    read -rp "ReverseLlama server URL (e.g. http://my-server:5050): " SERVER_URL
+    read -rp "Ngino server URL (e.g. http://my-server:5050): " SERVER_URL
 fi
 if [[ -z "$SERVER_URL" ]]; then
     die "Server URL is required."
@@ -225,7 +225,7 @@ else
 fi
 
 # ── Build client from source ─────────────────────────────────────────────────
-CLIENT_SRC="$REPO_ROOT/src/ReverseLlama.Client"
+CLIENT_SRC="$REPO_ROOT/src/Ngino.Client"
 if [[ ! -d "$CLIENT_SRC" ]]; then
     die "Client source not found at $CLIENT_SRC. Run this script from the repository or pass --install-dir."
 fi
@@ -238,18 +238,18 @@ case "$ARCH" in
     *)       die "Unsupported architecture: $ARCH" ;;
 esac
 
-info "Building ReverseLlama client (self-contained, $DOTNET_RID)..."
+info "Building Ngino client (self-contained, $DOTNET_RID)..."
 BUILD_DIR="$(mktemp -d /tmp/ngino-build.XXXXXX)"
 trap 'rm -rf "$BUILD_DIR"' EXIT
 
-"$DOTNET_CMD" publish "$CLIENT_SRC/ReverseLlama.Client.csproj" \
+"$DOTNET_CMD" publish "$CLIENT_SRC/Ngino.Client.csproj" \
     -c Release \
     -r "$DOTNET_RID" \
     --self-contained true \
     -o "$BUILD_DIR"
 
-if [[ ! -f "$BUILD_DIR/ReverseLlama.Client" ]]; then
-    die "Build failed. ReverseLlama.Client binary not found in output."
+if [[ ! -f "$BUILD_DIR/Ngino.Client" ]]; then
+    die "Build failed. Ngino.Client binary not found in output."
 fi
 
 info "Build successful."
@@ -258,7 +258,7 @@ info "Build successful."
 info "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp -a "$BUILD_DIR"/. "$INSTALL_DIR/"
-chmod +x "$INSTALL_DIR/ReverseLlama.Client"
+chmod +x "$INSTALL_DIR/Ngino.Client"
 
 info "Client installed to $INSTALL_DIR."
 
@@ -279,7 +279,7 @@ fi
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=ReverseLlama Tunnel Client
+Description=Ngino Tunnel Client
 After=network-online.target
 Wants=network-online.target
 $([ "$SKIP_OLLAMA" = "false" ] && echo "After=ollama.service")
@@ -287,7 +287,7 @@ $([ "$SKIP_OLLAMA" = "false" ] && echo "Wants=ollama.service")
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/ReverseLlama.Client --server "$SERVER_URL" --upstream "$UPSTREAM" --client-id "$CLIENT_ID"
+ExecStart=$INSTALL_DIR/Ngino.Client --server "$SERVER_URL" --upstream "$UPSTREAM" --client-id "$CLIENT_ID"
 Restart=always
 RestartSec=5
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1

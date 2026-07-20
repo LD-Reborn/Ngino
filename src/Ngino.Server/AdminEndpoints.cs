@@ -9,10 +9,10 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
-using ReverseLlama.Server.Data;
-using ReverseLlama.Server.Models;
+using Ngino.Server.Data;
+using Ngino.Server.Models;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal static class AdminEndpoints
 {

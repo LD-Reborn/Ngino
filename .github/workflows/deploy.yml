@@ -18,13 +18,13 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore src/ReverseLlama.Server
+        run: dotnet restore src/Ngino.Server
 
       - name: Build
-        run: dotnet build src/ReverseLlama.Server --configuration Release --no-restore
+        run: dotnet build src/Ngino.Server --configuration Release --no-restore
 
       - name: Publish
-        run: dotnet publish src/ReverseLlama.Server -c Release -o publish
+        run: dotnet publish src/Ngino.Server -c Release -o publish
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1.0.0
@@ -34,7 +34,7 @@ jobs:
           password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           source: "publish/*"
-          target: "/var/www/ReverseLlama"
+          target: "/var/www/Ngino"
           strip_components: 1
 
       - name: Restart app
@@ -45,4 +45,4 @@ jobs:
           password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           script: |
-            sudo systemctl restart ReverseLlama.service
+            sudo systemctl restart Ngino.service

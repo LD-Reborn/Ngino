@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\ReverseLlama.Protocol\ReverseLlama.Protocol.csproj" />
+    <ProjectReference Include="..\Ngino.Protocol\Ngino.Protocol.csproj" />
   </ItemGroup>
 
   <ItemGroup>

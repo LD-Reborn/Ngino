@@ -7,10 +7,10 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using ReverseLlama.Protocol;
-using ReverseLlama.Server;
-using ReverseLlama.Server.Data;
-using ReverseLlama.Server.Models;
+using Ngino.Protocol;
+using Ngino.Server;
+using Ngino.Server.Data;
+using Ngino.Server.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 var settings = ServerSettings.FromConfiguration(builder.Configuration);
@@ -33,7 +33,7 @@ if (settings.Keycloak.IsConfigured)
         })
         .AddCookie(options =>
         {
-            options.Cookie.Name = "ReverseLlama.Admin";
+            options.Cookie.Name = "Ngino.Admin";
             options.Cookie.SameSite = SameSiteMode.Lax;
             options.Cookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
             options.LoginPath = "/admin/login";
@@ -103,7 +103,7 @@ if (!settings.Keycloak.IsConfigured)
 
     builder.Services.ConfigureApplicationCookie(options =>
     {
-        options.Cookie.Name = "ReverseLlama.Admin";
+        options.Cookie.Name = "Ngino.Admin";
         options.Cookie.SameSite = SameSiteMode.Lax;
         options.Cookie.SecurePolicy = settings.SecureCookies ? CookieSecurePolicy.Always : CookieSecurePolicy.None;
         options.LoginPath = "/admin/login";

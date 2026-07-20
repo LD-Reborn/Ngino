@@ -1,8 +1,8 @@
 using System.Net.Http.Headers;
 using System.Threading.Channels;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Client;
+namespace Ngino.Client;
 
 internal sealed class UpstreamRequest
 {

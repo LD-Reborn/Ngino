@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class ResponseTokenCounter
 {

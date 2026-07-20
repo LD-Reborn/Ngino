@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Configuration;
-using ReverseLlama.Protocol;
+using Ngino.Protocol;
 
-namespace ReverseLlama.Server;
+namespace Ngino.Server;
 
 internal sealed class ServerSettings
 {
@@ -29,22 +29,22 @@ internal sealed class ServerSettings
     {
         return new ServerSettings
         {
-            StatusPath = NormalizePath(Read(configuration, "ReverseLlama:StatusPath", "status-path") ?? ProtocolConstants.DefaultStatusPath),
-            TunnelPath = NormalizePath(Read(configuration, "ReverseLlama:TunnelPath", "tunnel-path") ?? ProtocolConstants.DefaultTunnelPath),
-            Token = Read(configuration, "ReverseLlama:Token", "token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_TOKEN"),
-            ClientToken = Read(configuration, "ReverseLlama:ClientToken", "client-token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_CLIENT_TOKEN"),
-            ChunkSize = ReadInt(configuration, 64 * 1024, "ReverseLlama:ChunkSize", "chunk-size", "REVERSE_LLAMA_CHUNK_SIZE"),
+            StatusPath = NormalizePath(Read(configuration, "Ngino:StatusPath", "status-path") ?? ProtocolConstants.DefaultStatusPath),
+            TunnelPath = NormalizePath(Read(configuration, "Ngino:TunnelPath", "tunnel-path") ?? ProtocolConstants.DefaultTunnelPath),
+            Token = Read(configuration, "Ngino:Token", "token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_TOKEN"),
+            ClientToken = Read(configuration, "Ngino:ClientToken", "client-token") ?? Environment.GetEnvironmentVariable("REVERSE_LLAMA_CLIENT_TOKEN"),
+            ChunkSize = ReadInt(configuration, 64 * 1024, "Ngino:ChunkSize", "chunk-size", "REVERSE_LLAMA_CHUNK_SIZE"),
             EmbeddingCachePath = Read(
                 configuration,
-                "ReverseLlama:EmbeddingCachePath",
+                "Ngino:EmbeddingCachePath",
                 "embedding-cache-path",
                 "REVERSE_LLAMA_EMBEDDING_CACHE_PATH"),
             ManagementDatabasePath = Read(
                 configuration,
-                "ReverseLlama:ManagementDatabasePath",
+                "Ngino:ManagementDatabasePath",
                 "management-database-path",
                 "REVERSE_LLAMA_MANAGEMENT_DATABASE_PATH"),
-            SecureCookies = ReadBool(configuration, true, "ReverseLlama:SecureCookies", "secure-cookies", "REVERSE_LLAMA_SECURE_COOKIES"),
+            SecureCookies = ReadBool(configuration, true, "Ngino:SecureCookies", "secure-cookies", "REVERSE_LLAMA_SECURE_COOKIES"),
             Keycloak = new KeycloakSettings
             {
                 Authority = Read(configuration, "Authentication:Keycloak:Authority", "REVERSE_LLAMA_KEYCLOAK_AUTHORITY"),

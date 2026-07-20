@@ -1,8 +1,8 @@
 using System.Text.Json;
-using ReverseLlama.Client;
+using Ngino.Client;
 using Xunit;
 
-namespace ReverseLlama.Client.Tests;
+namespace Ngino.Client.Tests;
 
 public sealed class TunnelClientModelTests
 {
@@ -56,7 +56,7 @@ public sealed class TunnelClientModelTests
         Assert.Equal(HttpMethod.Post, request.Method);
         Assert.Equal("http://localhost:11434/api/embed", request.RequestUri!.AbsoluteUri);
         Assert.Equal("bge-m3:latest", document.RootElement.GetProperty("model").GetString());
-        Assert.Equal("ReverseLlama warmup", document.RootElement.GetProperty("input").GetString());
+        Assert.Equal("Ngino warmup", document.RootElement.GetProperty("input").GetString());
         Assert.Equal(expectedKeepAlive, document.RootElement.GetProperty("keep_alive").GetInt32());
     }
 }
