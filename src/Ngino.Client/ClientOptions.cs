@@ -18,6 +18,8 @@ internal sealed class ClientOptions
 
     public int ChunkSize { get; init; } = 64 * 1024;
 
+    public bool InsecureSkipTlsVerify { get; init; }
+
     public Uri TunnelUri
     {
         get
@@ -53,7 +55,8 @@ internal sealed class ClientOptions
             Token = Read(values, "token", "NGINO_TOKEN"),
             ClientId = Read(values, "client-id", "NGINO_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
             ReconnectDelay = TimeSpan.FromSeconds(ReadInt(values, 5, "reconnect-delay", "NGINO_RECONNECT_DELAY_SECONDS")),
-            ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "NGINO_CHUNK_SIZE")
+            ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "NGINO_CHUNK_SIZE"),
+            InsecureSkipTlsVerify = ReadBool(values, false, "insecure-skip-tls-verify", "NGINO_INSECURE_SKIP_TLS_VERIFY")
         };
     }
 
@@ -67,6 +70,7 @@ internal sealed class ClientOptions
           --tunnel-path <path>       Defaults to /_ngino/tunnel
           --reconnect-delay <sec>    Defaults to 5
           --chunk-size <bytes>       Defaults to 65536
+          --insecure-skip-tls-verify Disable server TLS certificate validation (unsafe)
         """;
 
     private static Dictionary<string, string> ParseArgs(string[] args)
@@ -85,6 +89,12 @@ internal sealed class ClientOptions
             if (keyValue.Length == 2)
             {
                 values[keyValue[0]] = keyValue[1];
+                continue;
+            }
+
+            if (keyValue[0].Equals("insecure-skip-tls-verify", StringComparison.OrdinalIgnoreCase))
+            {
+                values[keyValue[0]] = "true";
                 continue;
             }
 
@@ -122,6 +132,12 @@ internal sealed class ClientOptions
     {
         var value = Read(values, keys);
         return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static bool ReadBool(Dictionary<string, string> values, bool fallback, params string[] keys)
+    {
+        var value = Read(values, keys);
+        return bool.TryParse(value, out var parsed) ? parsed : fallback;
     }
 
     private static Uri ReadUri(Dictionary<string, string> values, string key, string envKey, string fallback)
