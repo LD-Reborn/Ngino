@@ -1,6 +1,6 @@
-# ReverseLlama
+# Ngino
 
-ReverseLlama is a small outbound HTTP tunnel for running Ollama (or vLLM, etc.) on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
+Ngino is a small outbound HTTP tunnel for running Ollama (or vLLM, etc.) on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
 
 The client opens and maintains a WebSocket connection to the server. The server accepts normal HTTP requests and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
 
@@ -41,22 +41,22 @@ The client provides a persistent outbound connection to the server and forwards 
 
 ## Projects
 
-- `src/ReverseLlama.Server`: ASP.NET Core server. Exposes the public proxy endpoint and accepts the outbound client tunnel.
-- `src/ReverseLlama.Client`: Console client. Runs on the GPU machine and forwards requests to local Ollama.
-- `src/ReverseLlama.Protocol`: Shared tunnel message types.
+- `src/Ngino.Server`: ASP.NET Core server. Exposes the public proxy endpoint and accepts the outbound client tunnel.
+- `src/Ngino.Client`: Console client. Runs on the GPU machine and forwards requests to local Ollama.
+- `src/Ngino.Protocol`: Shared tunnel message types.
 
 ## Run
 
 Start the server:
 
 ```powershell
-dotnet run --project src/ReverseLlama.Server --urls http://0.0.0.0:5050 -- --token "change-me"
+dotnet run --project src/Ngino.Server --urls http://0.0.0.0:5050 -- --token "change-me"
 ```
 
 Start the client on the GPU workstation:
 
 ```powershell
-dotnet run --project src/ReverseLlama.Client -- --server http://your-server:5050 --upstream http://localhost:11434 --token "change-me"
+dotnet run --project src/Ngino.Client -- --server http://your-server:5050 --upstream http://localhost:11434 --token "change-me"
 ```
 
 Call Ollama through the server. Model-bearing requests on the root path are routed to a connected client that reports that model, preferring the client with the fewest in-flight requests. You can still address one client explicitly by id:
@@ -132,7 +132,7 @@ sudo bash deploy/install-client.sh --server http://your-server:5050 --token "cha
 
 Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
 
-The script ensures .NET 10 and Ollama are installed, builds the client self-contained, installs it to `/opt/reversellama-client`, and creates a systemd service (`reversellama-client`). Logs: `journalctl -u reversellama-client -f`.
+The script ensures .NET 10 and Ollama are installed, builds the client self-contained, installs it to `/opt/Ngino-client`, and creates a systemd service (`Ngino-client`). Logs: `journalctl -u Ngino-client -f`.
 
 ## Notes
 
