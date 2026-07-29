@@ -167,11 +167,14 @@ internal static class AdminEndpoints
             try
             {
                 var manual = string.Equals(request.Mode, "manual", StringComparison.OrdinalIgnoreCase);
+
                 TimeSpan? duration = manual
                     ? null
-                    : TimeSpan.FromMinutes(Math.Clamp(request.DurationMinutes ?? 60, 1, 24 * 60));
+                    : request.DurationMinutes is { } minutes
+                        ? TimeSpan.FromMinutes(Math.Clamp(minutes, 1, 24 * 60))
+                        : null;
 
-                store.DisableClient(clientId, duration, manual, request.Reason);
+                store.DisableClient(clientId, duration, manual, request.Reason, request.StartAtUtc, request.UntilUtc);
                 return Results.Ok(new { clientId, disabled = true });
             }
             catch (Exception exception)
@@ -673,6 +676,7 @@ internal static class AdminEndpoints
                 snapshot?.ActiveModels ?? [],
                 snapshot?.ModelsUpdatedAt,
                 access.IsDisabled,
+                access.DisabledFromUtc,
                 access.DisabledUntilUtc,
                 access.DisabledManually,
                 access.DisabledReason,
@@ -880,7 +884,9 @@ internal static class AdminEndpoints
 internal sealed record DisableClientRequest(
     string? Mode,
     int? DurationMinutes,
-    string? Reason);
+    string? Reason,
+    DateTimeOffset? StartAtUtc,
+    DateTimeOffset? UntilUtc);
 
 internal sealed record ModelActionRequest(
     string ClientId,
@@ -929,6 +935,7 @@ internal sealed record ClientSummary(
     IReadOnlyList<string> ActiveModels,
     DateTimeOffset? ModelsUpdatedAt,
     bool Disabled,
+    DateTimeOffset? DisabledFromUtc,
     DateTimeOffset? DisabledUntilUtc,
     bool DisabledManually,
     string? DisabledReason,
