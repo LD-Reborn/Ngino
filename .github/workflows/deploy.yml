@@ -45,4 +45,4 @@ jobs:
           password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           port: ${{ secrets.DEPLOY_SSH_PORT }}
           script: |
-            sudo systemctl restart Ngino.service
+            sudo systemctl restart Ngino-server.service
