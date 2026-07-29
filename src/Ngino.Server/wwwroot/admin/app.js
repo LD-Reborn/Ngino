@@ -1665,16 +1665,20 @@ function emptyState(text) {
 }
 
 function disabledText(client) {
+  var text = "";
   if (client.disabledManually) {
-    return "Until enabled manually";
+    text = "Until enabled manually";
+  } else if (client.disabledUntilUtc) {
+    text = `Until ${formatDate(client.disabledUntilUtc)}`;
+  } else if (isScheduled(client)) {
+    text = `Scheduled from ${formatDate(client.disabledFromUtc)}`;
+  } else {
+    text = "Disabled";
   }
-  if (client.disabledUntilUtc) {
-    return `Until ${formatDate(client.disabledUntilUtc)}`;
+  if (client.disabledReason) {
+    text += ` — ${escapeHtml(client.disabledReason)}`;
   }
-  if (isScheduled(client)) {
-    return `Scheduled from ${formatDate(client.disabledFromUtc)}`;
-  }
-  return "Disabled";
+  return text;
 }
 
 function isScheduled(client) {
@@ -1793,6 +1797,7 @@ function showDisableModal(clientId) {
 
     function updateWhen() {
       const val = overlay.querySelector('input[name="d-when"]:checked').value;
+      fromInput.style.display = val === "later" ? "" : "none";
       fromInput.disabled = val !== "later";
       if (val === "now") fromInput.value = "";
     }
