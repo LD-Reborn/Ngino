@@ -834,21 +834,50 @@ internal sealed class ManagementStore
                 """;
             command.Parameters.AddWithValue("$group_id", groupId);
 
-            var result = new List<GroupClientInfo>();
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                result.Add(new GroupClientInfo(
-                    reader.GetInt64(0),
-                    reader.GetString(1),
-                    reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
-                    ReadKeepalivePolicy(reader, 5, 6, 7)));
-            }
-
-            return result;
+            return ReadGroupClientInfos(command);
         }
+    }
+
+    public IReadOnlyList<GroupClientInfo> ListAllGroupClients()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id, group_id, client_id, model, client_pattern,
+                       keepalive_instances_to_keep_alive,
+                       keepalive_max_parallelism_per_client,
+                       keepalive_parallelism_headroom
+                FROM group_members
+                ORDER BY client_id, model, client_pattern
+                """;
+
+            return ReadGroupClientInfos(command);
+        }
+    }
+
+    private List<GroupClientInfo> ReadGroupClientInfos(SqliteCommand command)
+    {
+        var result = new List<GroupClientInfo>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(new GroupClientInfo(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                ReadKeepalivePolicy(reader, 5, 6, 7)));
+        }
+
+        return result;
     }
 
     public GroupClientInfo AddGroupClient(

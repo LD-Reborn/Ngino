@@ -16,6 +16,14 @@ const sidebarMeta = document.getElementById("sidebarMeta");
 
 document.getElementById("refreshButton").addEventListener("click", () => refresh(true));
 window.addEventListener("hashchange", () => renderRoute());
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".help-button") || event.target.closest(".help-popover")) {
+    return;
+  }
+
+  document.querySelectorAll(".help-popover").forEach((popover) => popover.remove());
+  document.querySelectorAll(".help-button.active").forEach((button) => button.classList.remove("active"));
+});
 
 const morphdomOptions = {
   childrenOnly: true,
@@ -37,6 +45,38 @@ function patchSidebar(html) {
   morphdom(sidebarMeta, temp, morphdomOptions);
 }
 
+function renderFieldLabel(forId, label, helpText) {
+  return `
+    <label for="${escapeAttr(forId)}">
+      <span>${escapeHtml(label)}</span>
+      <button class="help-button" type="button" data-action="toggle-help" data-help="${escapeAttr(helpText)}" aria-label="Explain ${escapeAttr(label)}">?</button>
+    </label>
+  `;
+}
+
+function toggleHelpPopover(button) {
+  const field = button.closest(".field");
+  if (!field) {
+    return;
+  }
+
+  const existingPopover = field.querySelector(".help-popover");
+  if (existingPopover) {
+    existingPopover.remove();
+    button.classList.remove("active");
+    return;
+  }
+
+  document.querySelectorAll(".help-popover").forEach((popover) => popover.remove());
+  document.querySelectorAll(".help-button.active").forEach((activeButton) => activeButton.classList.remove("active"));
+
+  const popover = document.createElement("div");
+  popover.className = "help-popover";
+  popover.textContent = button.dataset.help || "";
+  field.appendChild(popover);
+  button.classList.add("active");
+}
+
 content.addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-action]");
   if (!button) {
@@ -44,6 +84,12 @@ content.addEventListener("click", async (event) => {
   }
 
   const { action, clientId, model, keyId, groupId, memberId } = button.dataset;
+
+  if (action === "toggle-help") {
+    event.stopPropagation();
+    toggleHelpPopover(button);
+    return;
+  }
 
   try {
     setBusy(button, true);
@@ -985,15 +1031,15 @@ function renderGroupDetail() {
             <input class="input" id="addClientPattern" name="clientPattern" placeholder="GPU_[0-9]*">
           </div>
           <div class="field">
-            <label for="addClientKeepaliveInstances">Keepalive instances</label>
+            ${renderFieldLabel("addClientKeepaliveInstances", "Min always loaded instances", "The minimum number of warm model instances that should stay loaded and ready so requests do not wait for a cold start.")}
             <input class="input" id="addClientKeepaliveInstances" name="keepaliveInstancesToKeepAlive" type="number" min="1" step="1" value="1">
           </div>
           <div class="field">
-            <label for="addClientKeepaliveMaxParallelism">Max parallelism per client</label>
+            ${renderFieldLabel("addClientKeepaliveMaxParallelism", "Max parallelism per client", "The maximum number of concurrent requests this client can handle at once. Higher values let one client absorb more traffic, but too many can overload the GPU.")}
             <input class="input" id="addClientKeepaliveMaxParallelism" name="keepaliveMaxParallelismPerClient" type="number" min="1" step="1" value="1">
           </div>
           <div class="field">
-            <label for="addClientKeepaliveHeadroom">Parallelism headroom</label>
+            ${renderFieldLabel("addClientKeepaliveHeadroom", "Parallelism headroom", "How much spare parallelism to leave unused so traffic spikes can be absorbed without saturating the GPU. A larger headroom makes routing more conservative.")}
             <input class="input" id="addClientKeepaliveHeadroom" name="keepaliveParallelismHeadroom" type="number" min="1" step="1" value="1">
           </div>
           <button class="button" type="submit">Add</button>

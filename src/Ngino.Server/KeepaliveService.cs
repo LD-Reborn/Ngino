@@ -1,0 +1,125 @@
+namespace Ngino.Server;
+
+internal sealed class KeepaliveService : BackgroundService
+{
+    private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
+
+    private readonly TunnelHub _hub;
+    private readonly ManagementStore _managementStore;
+    private readonly ILogger<KeepaliveService> _logger;
+
+    public KeepaliveService(TunnelHub hub, ManagementStore managementStore, ILogger<KeepaliveService> logger)
+    {
+        _hub = hub;
+        _managementStore = managementStore;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await ApplyKeepaliveAsync(stoppingToken);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "Keepalive cycle failed.");
+            }
+
+            await Task.Delay(CheckInterval, stoppingToken);
+        }
+    }
+
+    private async Task ApplyKeepaliveAsync(CancellationToken cancellationToken)
+    {
+        var members = _managementStore.ListAllGroupClients();
+        if (members.Count == 0)
+        {
+            return;
+        }
+
+        var snapshots = _hub.ClientSnapshots;
+        if (snapshots.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var member in members)
+        {
+            if (string.IsNullOrWhiteSpace(member.Model))
+            {
+                continue;
+            }
+
+            var matchingCandidates = snapshots
+                .Select(snapshot => new KeepaliveCandidate(
+                    snapshot.Id,
+                    HasModel(snapshot.Models, member.Model),
+                    HasModel(snapshot.ActiveModels, member.Model)))
+                .ToList();
+
+            var actions = KeepaliveCoordinator.PlanActions([member], matchingCandidates);
+            foreach (var action in actions)
+            {
+                try
+                {
+                    var connection = _hub.Get(action.ClientId);
+                    if (connection is null)
+                    {
+                        continue;
+                    }
+
+                    var response = await connection.SendModelCommandAsync(
+                        action.Command,
+                        action.Model,
+                        payloadJson: null,
+                        CommandTimeout,
+                        cancellationToken);
+
+                    if (response.StatusCode is < 200 or >= 300)
+                    {
+                        _logger.LogWarning(
+                            "Keepalive {Command} for model {Model} on client {ClientId} returned HTTP {StatusCode}.",
+                            action.Command,
+                            action.Model,
+                            action.ClientId,
+                            response.StatusCode);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    _logger.LogWarning(exception,
+                        "Keepalive {Command} for model {Model} on client {ClientId} failed.",
+                        action.Command,
+                        action.Model,
+                        action.ClientId);
+                }
+            }
+        }
+    }
+
+    private static bool HasModel(IEnumerable<string> models, string requestedModel)
+    {
+        if (string.IsNullOrWhiteSpace(requestedModel))
+        {
+            return false;
+        }
+
+        var requested = requestedModel.Trim();
+        return models.Any(model => ModelNamesMatch(requested, model));
+    }
+
+    private static bool ModelNamesMatch(string requested, string available)
+    {
+        return string.Equals(requested, available, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(StripLatestTag(requested), StripLatestTag(available), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string StripLatestTag(string model) =>
+        model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
+            ? model[..^":latest".Length]
+            : model;
+}
