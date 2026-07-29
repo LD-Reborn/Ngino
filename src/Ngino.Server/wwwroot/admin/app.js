@@ -483,6 +483,7 @@ function renderClients() {
 
 function clientsTable(clients) {
   const clientGroups = state.summary?.clientGroups || {};
+  const groupNames = Object.fromEntries((state.summary?.groups || []).map((g) => [g.id, g.name]));
   const rows = clients.map((client) => {
     const groups = clientGroups[client.id] || [];
     return `
@@ -507,7 +508,7 @@ function clientsTable(clients) {
       <td>${modelBadges(client.activeModels)}</td>
       <td>
         <div class="badge-row">
-          ${groups.length ? groups.map((g) => `<a class="badge" href="#groups/${encodeURIComponent(g)}">${escapeHtml(g)}</a>`).join("") : `<span class="cell-sub">None</span>`}
+          ${groups.length ? groups.map((g) => `<a class="badge" href="#groups/${encodeURIComponent(g)}">${escapeHtml(groupNames[g] || g)}</a>`).join("") : `<span class="cell-sub">None</span>`}
         </div>
       </td>
       <td>
