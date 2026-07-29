@@ -11,6 +11,10 @@ try
     Console.WriteLine($"  client id: {options.ClientId}");
     Console.WriteLine($"  server tunnel: {options.TunnelUri}");
     Console.WriteLine($"  local upstream: {options.Upstream}");
+    if (options.InsecureSkipTlsVerify)
+    {
+        Console.WriteLine("  WARNING: server TLS certificate validation is disabled");
+    }
 
     // Args are parsed by ClientOptions; keep them away from the host configuration.
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });

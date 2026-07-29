@@ -41,6 +41,11 @@ internal sealed class TunnelClient
             using var socket = new ClientWebSocket();
             socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
 
+            if (_options.InsecureSkipTlsVerify)
+            {
+                socket.Options.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
+            }
+
             if (!string.IsNullOrWhiteSpace(_options.Token))
             {
                 socket.Options.SetRequestHeader(ProtocolConstants.TokenHeader, _options.Token);
