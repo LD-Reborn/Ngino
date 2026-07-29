@@ -369,7 +369,14 @@ internal static class AdminEndpoints
 
             try
             {
-                var member = store.AddGroupClient(id, request.ClientId, request.Model, request.ClientPattern);
+                var member = store.AddGroupClient(
+                    id,
+                    request.ClientId,
+                    request.Model,
+                    request.ClientPattern,
+                    request.KeepaliveInstancesToKeepAlive,
+                    request.KeepaliveMaxParallelismPerClient,
+                    request.KeepaliveParallelismHeadroom);
                 return Results.Json(member);
             }
             catch (ArgumentException exception)
@@ -889,7 +896,10 @@ internal sealed record UpdateGroupRequest(string Name);
 internal sealed record AddGroupClientRequest(
     string? ClientId,
     string? Model,
-    string? ClientPattern);
+    string? ClientPattern,
+    int? KeepaliveInstancesToKeepAlive,
+    int? KeepaliveMaxParallelismPerClient,
+    int? KeepaliveParallelismHeadroom);
 
 internal sealed record SetUserKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
 

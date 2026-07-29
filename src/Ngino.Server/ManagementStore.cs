@@ -824,7 +824,10 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT id, group_id, client_id, model, client_pattern
+                SELECT id, group_id, client_id, model, client_pattern,
+                       keepalive_instances_to_keep_alive,
+                       keepalive_max_parallelism_per_client,
+                       keepalive_parallelism_headroom
                 FROM group_members
                 WHERE group_id = $group_id
                 ORDER BY client_id, model, client_pattern
@@ -840,14 +843,22 @@ internal sealed class ManagementStore
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.IsDBNull(4) ? null : reader.GetString(4)));
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    ReadKeepalivePolicy(reader, 5, 6, 7)));
             }
 
             return result;
         }
     }
 
-    public GroupClientInfo AddGroupClient(string groupId, string? clientId, string? model, string? clientPattern)
+    public GroupClientInfo AddGroupClient(
+        string groupId,
+        string? clientId,
+        string? model,
+        string? clientPattern,
+        int? keepaliveInstancesToKeepAlive,
+        int? keepaliveMaxParallelismPerClient,
+        int? keepaliveParallelismHeadroom)
     {
         EnsureAvailable();
 
@@ -873,24 +884,46 @@ internal sealed class ManagementStore
             }
         }
 
+        var policy = NormalizeKeepalivePolicy(
+            keepaliveInstancesToKeepAlive,
+            keepaliveMaxParallelismPerClient,
+            keepaliveParallelismHeadroom);
+
         lock (_lock)
         {
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                INSERT INTO group_members (group_id, client_id, model, client_pattern)
-                VALUES ($group_id, $client_id, $model, $client_pattern)
+                INSERT INTO group_members (
+                    group_id,
+                    client_id,
+                    model,
+                    client_pattern,
+                    keepalive_instances_to_keep_alive,
+                    keepalive_max_parallelism_per_client,
+                    keepalive_parallelism_headroom)
+                VALUES (
+                    $group_id,
+                    $client_id,
+                    $model,
+                    $client_pattern,
+                    $keepalive_instances_to_keep_alive,
+                    $keepalive_max_parallelism_per_client,
+                    $keepalive_parallelism_headroom)
                 """;
             command.Parameters.AddWithValue("$group_id", groupId);
             command.Parameters.AddWithValue("$client_id", string.IsNullOrWhiteSpace(clientId) ? DBNull.Value : clientId);
             command.Parameters.AddWithValue("$model", string.IsNullOrWhiteSpace(model) ? DBNull.Value : model);
             command.Parameters.AddWithValue("$client_pattern", string.IsNullOrWhiteSpace(clientPattern) ? DBNull.Value : clientPattern);
+            command.Parameters.AddWithValue("$keepalive_instances_to_keep_alive", policy.InstancesToKeepAlive);
+            command.Parameters.AddWithValue("$keepalive_max_parallelism_per_client", policy.MaxParallelismPerClient);
+            command.Parameters.AddWithValue("$keepalive_parallelism_headroom", policy.ParallelismHeadroom);
             command.ExecuteNonQuery();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
             var insertedId = (long)idCommand.ExecuteScalar()!;
-            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern);
+            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern, policy);
         }
     }
 
@@ -1987,7 +2020,10 @@ internal sealed class ManagementStore
                     group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
                     client_id TEXT NULL,
                     model TEXT NULL,
-                    client_pattern TEXT NULL
+                    client_pattern TEXT NULL,
+                    keepalive_instances_to_keep_alive INTEGER NOT NULL DEFAULT 1,
+                    keepalive_max_parallelism_per_client INTEGER NOT NULL DEFAULT 1,
+                    keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_group_members_group_id
@@ -2009,6 +2045,29 @@ internal sealed class ManagementStore
                 );
                 """;
             command.ExecuteNonQuery();
+
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('group_members') WHERE name = 'keepalive_instances_to_keep_alive'
+                """;
+            var hasKeepaliveInstancesColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasKeepaliveInstancesColumn)
+            {
+                using var addKeepaliveInstances = connection.CreateCommand();
+                addKeepaliveInstances.CommandText = "ALTER TABLE group_members ADD COLUMN keepalive_instances_to_keep_alive INTEGER NOT NULL DEFAULT 1";
+                addKeepaliveInstances.ExecuteNonQuery();
+
+                using var addKeepaliveMaxParallelism = connection.CreateCommand();
+                addKeepaliveMaxParallelism.CommandText = "ALTER TABLE group_members ADD COLUMN keepalive_max_parallelism_per_client INTEGER NOT NULL DEFAULT 1";
+                addKeepaliveMaxParallelism.ExecuteNonQuery();
+
+                using var addKeepaliveHeadroom = connection.CreateCommand();
+                addKeepaliveHeadroom.CommandText = "ALTER TABLE group_members ADD COLUMN keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1";
+                addKeepaliveHeadroom.ExecuteNonQuery();
+            }
+        }
 
         using (var migrate = connection.CreateCommand())
         {
@@ -2231,6 +2290,30 @@ internal sealed class ManagementStore
         return connection;
     }
 
+    private static GroupClientKeepalivePolicy? ReadKeepalivePolicy(SqliteDataReader reader, int instancesOrdinal, int maxParallelismOrdinal, int headroomOrdinal)
+    {
+        if (reader.IsDBNull(instancesOrdinal) || reader.IsDBNull(maxParallelismOrdinal) || reader.IsDBNull(headroomOrdinal))
+        {
+            return null;
+        }
+
+        return NormalizeKeepalivePolicy(
+            reader.GetInt32(instancesOrdinal),
+            reader.GetInt32(maxParallelismOrdinal),
+            reader.GetInt32(headroomOrdinal));
+    }
+
+    private static GroupClientKeepalivePolicy NormalizeKeepalivePolicy(
+        int? instancesToKeepAlive,
+        int? maxParallelismPerClient,
+        int? parallelismHeadroom)
+    {
+        return new GroupClientKeepalivePolicy(
+            Math.Max(1, instancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive),
+            Math.Max(1, maxParallelismPerClient ?? GroupClientKeepalivePolicy.Default.MaxParallelismPerClient),
+            Math.Max(1, parallelismHeadroom ?? GroupClientKeepalivePolicy.Default.ParallelismHeadroom));
+    }
+
     private void EnsureAvailable()
     {
         if (!_isAvailable)
@@ -2420,7 +2503,16 @@ internal sealed record GroupClientInfo(
     string GroupId,
     string? ClientId,
     string? Model,
-    string? ClientPattern);
+    string? ClientPattern,
+    GroupClientKeepalivePolicy? KeepalivePolicy = null);
+
+internal sealed record GroupClientKeepalivePolicy(
+    int InstancesToKeepAlive,
+    int MaxParallelismPerClient,
+    int ParallelismHeadroom)
+{
+    public static GroupClientKeepalivePolicy Default { get; } = new(1, 1, 1);
+}
 
 internal sealed record UserKeyGroupInfo(
     string UserKeyId,

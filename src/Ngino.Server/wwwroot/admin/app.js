@@ -228,6 +228,9 @@ content.addEventListener("submit", async (event) => {
       if (data.clientPattern && data.clientPattern.trim()) {
         body.clientPattern = data.clientPattern.trim();
       }
+      body.keepaliveInstancesToKeepAlive = parseInt(data.keepaliveInstancesToKeepAlive, 10) || 1;
+      body.keepaliveMaxParallelismPerClient = parseInt(data.keepaliveMaxParallelismPerClient, 10) || 1;
+      body.keepaliveParallelismHeadroom = parseInt(data.keepaliveParallelismHeadroom, 10) || 1;
 
       if (!body.clientId && !body.clientPattern) {
         throw new Error("Either Client ID or Client pattern is required.");
@@ -981,9 +984,21 @@ function renderGroupDetail() {
             <label for="addClientPattern">Client pattern (regex, optional)</label>
             <input class="input" id="addClientPattern" name="clientPattern" placeholder="GPU_[0-9]*">
           </div>
+          <div class="field">
+            <label for="addClientKeepaliveInstances">Keepalive instances</label>
+            <input class="input" id="addClientKeepaliveInstances" name="keepaliveInstancesToKeepAlive" type="number" min="1" step="1" value="1">
+          </div>
+          <div class="field">
+            <label for="addClientKeepaliveMaxParallelism">Max parallelism per client</label>
+            <input class="input" id="addClientKeepaliveMaxParallelism" name="keepaliveMaxParallelismPerClient" type="number" min="1" step="1" value="1">
+          </div>
+          <div class="field">
+            <label for="addClientKeepaliveHeadroom">Parallelism headroom</label>
+            <input class="input" id="addClientKeepaliveHeadroom" name="keepaliveParallelismHeadroom" type="number" min="1" step="1" value="1">
+          </div>
           <button class="button" type="submit">Add</button>
         </form>
-        <div class="cell-sub" style="margin-top:8px">Provide either a Client ID (for explicit client access) or a Client pattern (for regex-based matching). Model is optional to restrict to a specific model.</div>
+        <div class="cell-sub" style="margin-top:8px">Provide either a Client ID (for explicit client access) or a Client pattern (for regex-based matching). Model is optional to restrict to a specific model. Keepalive defaults to 1 instance, 1 parallelism, and 1 headroom.</div>
       </div>
     </div>
     <div class="panel">
@@ -1096,6 +1111,17 @@ function renderGroupDetail() {
   `);
 }
 
+function formatKeepalivePolicy(policy) {
+  if (!policy) {
+    return `<div class="cell-sub">Default (1 / 1 / 1)</div>`;
+  }
+
+  return `
+    <div class="cell-main">${policy.instancesToKeepAlive} instance${policy.instancesToKeepAlive === 1 ? "" : "s"}</div>
+    <div class="cell-sub">Parallelism ${policy.maxParallelismPerClient} · headroom ${policy.parallelismHeadroom}</div>
+  `;
+}
+
 function groupClientsTable(clients, groupId) {
   const rows = clients.map((client) => `
     <tr>
@@ -1117,6 +1143,7 @@ function groupClientsTable(clients, groupId) {
           : `<div class="cell-sub">-</div>`
         }
       </td>
+      <td>${formatKeepalivePolicy(client.keepalivePolicy)}</td>
       <td>
         <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${client.id}">Remove</button>
       </td>
@@ -1130,6 +1157,7 @@ function groupClientsTable(clients, groupId) {
           <th>Client ID</th>
           <th>Model</th>
           <th>Client pattern</th>
+          <th>Keepalive policy</th>
           <th></th>
         </tr>
       </thead>

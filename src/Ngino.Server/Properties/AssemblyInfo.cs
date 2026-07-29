@@ -1,4 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("Ngino.Client.Tests")]
 [assembly: InternalsVisibleTo("ReverseLlama.Client.Tests")]
