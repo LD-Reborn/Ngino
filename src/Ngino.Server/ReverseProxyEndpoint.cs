@@ -378,8 +378,16 @@ internal static class ReverseProxyEndpoint
             return $"Tunnel client '{clientId}' is disabled until it is enabled manually.";
         }
 
-        return access.DisabledUntilUtc is { } disabledUntil
-            ? $"Tunnel client '{clientId}' is disabled until {disabledUntil:O}."
+        if (access.DisabledUntilUtc is { } disabledUntil)
+        {
+            var from = access.DisabledFromUtc is { } fromUtc
+                ? $" (scheduled from {fromUtc:O})"
+                : "";
+            return $"Tunnel client '{clientId}' is disabled until {disabledUntil:O}.{from}";
+        }
+
+        return access.DisabledFromUtc is { } fromUtc2
+            ? $"Tunnel client '{clientId}' is disabled (scheduled from {fromUtc2:O})."
             : $"Tunnel client '{clientId}' is disabled.";
     }
 

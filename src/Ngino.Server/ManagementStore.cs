@@ -378,7 +378,7 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT disabled_until_utc, disabled_manually, disabled_reason
+                SELECT disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc
                 FROM client_controls
                 WHERE client_id = $client_id
                 """;
@@ -393,18 +393,22 @@ internal sealed class ManagementStore
             var disabledUntil = ReadNullableDateTimeOffset(reader, 0);
             var disabledManually = reader.GetInt32(1) != 0;
             var reason = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var disabledFrom = ReadNullableDateTimeOffset(reader, 3);
 
-            if (disabledManually)
+            var now = DateTimeOffset.UtcNow;
+            var isScheduled = disabledFrom > now;
+
+            if (disabledManually && !isScheduled)
             {
-                return new ClientAccess(true, null, true, reason);
+                return new ClientAccess(true, disabledFrom, null, true, reason);
             }
 
-            if (disabledUntil is { } until && until > DateTimeOffset.UtcNow)
+            if (!isScheduled && disabledUntil is { } until && until > now)
             {
-                return new ClientAccess(true, until, false, reason);
+                return new ClientAccess(true, disabledFrom, until, false, reason);
             }
 
-            return ClientAccess.Enabled;
+            return new ClientAccess(false, disabledFrom, disabledUntil, false, reason);
         }
     }
 
@@ -421,7 +425,7 @@ internal sealed class ManagementStore
         {
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT client_id, disabled_until_utc, disabled_manually, disabled_reason FROM client_controls";
+            command.CommandText = "SELECT client_id, disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc FROM client_controls";
 
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -430,19 +434,23 @@ internal sealed class ManagementStore
                 var disabledUntil = ReadNullableDateTimeOffset(reader, 1);
                 var disabledManually = reader.GetInt32(2) != 0;
                 var reason = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var disabledFrom = ReadNullableDateTimeOffset(reader, 4);
 
-                result[clientId] = disabledManually
-                    ? new ClientAccess(true, null, true, reason)
-                    : disabledUntil is { } until && until > DateTimeOffset.UtcNow
-                        ? new ClientAccess(true, until, false, reason)
-                        : ClientAccess.Enabled;
+                var now = DateTimeOffset.UtcNow;
+                var isScheduled = disabledFrom > now;
+
+                result[clientId] = disabledManually && !isScheduled
+                    ? new ClientAccess(true, disabledFrom, null, true, reason)
+                    : !isScheduled && disabledUntil is { } until && until > now
+                        ? new ClientAccess(true, disabledFrom, until, false, reason)
+                        : new ClientAccess(false, disabledFrom, disabledUntil, disabledManually, reason);
             }
         }
 
         return result;
     }
 
-    public void DisableClient(string clientId, TimeSpan? duration, bool manually, string? reason)
+    public void DisableClient(string clientId, TimeSpan? duration, bool manually, string? reason, DateTimeOffset? startAtUtc = null, DateTimeOffset? untilUtc = null)
     {
         EnsureAvailable();
 
@@ -452,7 +460,9 @@ internal sealed class ManagementStore
         }
 
         var now = DateTimeOffset.UtcNow;
-        var disabledUntil = manually ? null : now.Add(duration ?? TimeSpan.FromHours(1)).ToString("O");
+        var disabledFrom = startAtUtc?.ToString("O");
+        var disabledUntil = untilUtc?.ToString("O")
+            ?? (manually ? null : now.Add(duration ?? TimeSpan.FromHours(1)).ToString("O"));
 
         lock (_lock)
         {
@@ -462,23 +472,27 @@ internal sealed class ManagementStore
                 INSERT INTO client_controls (
                     client_id,
                     disabled_until_utc,
+                    disabled_from_utc,
                     disabled_manually,
                     disabled_reason,
                     updated_at_utc)
                 VALUES (
                     $client_id,
                     $disabled_until_utc,
+                    $disabled_from_utc,
                     $disabled_manually,
                     $disabled_reason,
                     $updated_at_utc)
                 ON CONFLICT(client_id) DO UPDATE SET
                     disabled_until_utc = excluded.disabled_until_utc,
+                    disabled_from_utc = excluded.disabled_from_utc,
                     disabled_manually = excluded.disabled_manually,
                     disabled_reason = excluded.disabled_reason,
                     updated_at_utc = excluded.updated_at_utc
                 """;
             command.Parameters.AddWithValue("$client_id", clientId);
             command.Parameters.AddWithValue("$disabled_until_utc", (object?)disabledUntil ?? DBNull.Value);
+            command.Parameters.AddWithValue("$disabled_from_utc", (object?)disabledFrom ?? DBNull.Value);
             command.Parameters.AddWithValue("$disabled_manually", manually ? 1 : 0);
             command.Parameters.AddWithValue("$disabled_reason", string.IsNullOrWhiteSpace(reason) ? DBNull.Value : reason.Trim());
             command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
@@ -503,17 +517,20 @@ internal sealed class ManagementStore
                 INSERT INTO client_controls (
                     client_id,
                     disabled_until_utc,
+                    disabled_from_utc,
                     disabled_manually,
                     disabled_reason,
                     updated_at_utc)
                 VALUES (
                     $client_id,
                     NULL,
+                    NULL,
                     0,
                     NULL,
                     $updated_at_utc)
                 ON CONFLICT(client_id) DO UPDATE SET
                     disabled_until_utc = NULL,
+                    disabled_from_utc = NULL,
                     disabled_manually = 0,
                     disabled_reason = NULL,
                     updated_at_utc = excluded.updated_at_utc
@@ -1997,6 +2014,7 @@ internal sealed class ManagementStore
                 CREATE TABLE IF NOT EXISTS client_controls (
                     client_id TEXT NOT NULL PRIMARY KEY,
                     disabled_until_utc TEXT NULL,
+                    disabled_from_utc TEXT NULL,
                     disabled_manually INTEGER NOT NULL DEFAULT 0,
                     disabled_reason TEXT NULL,
                     updated_at_utc TEXT NOT NULL
@@ -2306,6 +2324,21 @@ internal sealed class ManagementStore
             }
         }
 
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('client_controls') WHERE name = 'disabled_from_utc'
+                """;
+            var hasFromColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasFromColumn)
+            {
+                using var addFromCol = connection.CreateCommand();
+                addFromCol.CommandText = "ALTER TABLE client_controls ADD COLUMN disabled_from_utc TEXT NULL";
+                addFromCol.ExecuteNonQuery();
+            }
+        }
+
         _logger.LogInformation(
             "Loaded {ClientKeyCount} client key(s) from {DatabasePath}.",
             _clientKeysByHash.Count,
@@ -2406,11 +2439,12 @@ internal sealed class ManagementStore
 
 internal sealed record ClientAccess(
     bool IsDisabled,
+    DateTimeOffset? DisabledFromUtc,
     DateTimeOffset? DisabledUntilUtc,
     bool DisabledManually,
     string? DisabledReason)
 {
-    public static ClientAccess Enabled { get; } = new(false, null, false, null);
+    public static ClientAccess Enabled { get; } = new(false, null, null, false, null);
 }
 
 internal sealed record UserKeyInfo(

@@ -94,13 +94,21 @@ content.addEventListener("click", async (event) => {
   try {
     setBusy(button, true);
 
-    if (action === "disable-hour") {
-      await api(`/clients/${encodeURIComponent(clientId)}/disable`, {
-        method: "POST",
-        body: { mode: "duration", durationMinutes: 60 }
-      });
-      setNotice(`Disabled ${clientId} for one hour.`);
-      await refresh();
+    if (action === "disable-temporary") {
+      setBusy(button, false);
+      try {
+        const body = await showDisableModal(clientId);
+        setBusy(button, true);
+        await api(`/clients/${encodeURIComponent(clientId)}/disable`, {
+          method: "POST",
+          body
+        });
+        setNotice(`Disabled ${clientId}.`);
+        await refresh();
+      } catch {
+        // cancelled
+      }
+      return;
     }
 
     if (action === "disable-manual") {
@@ -497,6 +505,7 @@ function clientsTable(clients) {
           ${client.disabled ? badge(client.disabledManually ? "Disabled manual" : "Disabled timed", "bad") : badge("Enabled", "good")}
         </div>
         ${client.disabled ? `<div class="cell-sub">${escapeHtml(disabledText(client))}</div>` : ""}
+        ${isScheduled(client) ? `<div class="cell-sub">${escapeHtml(disabledText(client))}</div>` : ""}
       </td>
       <td>${number(client.pendingRequests)}</td>
       <td>
@@ -512,7 +521,7 @@ function clientsTable(clients) {
       </td>
       <td>
         <div class="actions">
-          <button class="button warning" data-action="disable-hour" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "disabled" : ""}>Disable 1h</button>
+          <button class="button warning" data-action="disable-temporary" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "disabled" : ""}>Disable temporary</button>
           <button class="button warning" data-action="disable-manual" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "disabled" : ""}>Disable</button>
           <button class="button secondary" data-action="enable-client" data-client-id="${escapeAttr(client.id)}" ${client.disabled ? "" : "disabled"}>Enable</button>
         </div>
@@ -1659,8 +1668,17 @@ function disabledText(client) {
   if (client.disabledManually) {
     return "Until enabled manually";
   }
+  if (client.disabledUntilUtc) {
+    return `Until ${formatDate(client.disabledUntilUtc)}`;
+  }
+  if (isScheduled(client)) {
+    return `Scheduled from ${formatDate(client.disabledFromUtc)}`;
+  }
+  return "Disabled";
+}
 
-  return client.disabledUntilUtc ? `Until ${formatDate(client.disabledUntilUtc)}` : "Disabled";
+function isScheduled(client) {
+  return client.disabledFromUtc && new Date(client.disabledFromUtc) > new Date();
 }
 
 function formatDate(value) {
@@ -1720,6 +1738,128 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function showDisableModal(clientId) {
+  return new Promise((resolve, reject) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-dialog">
+        <h3>Disable client &quot;${escapeHtml(clientId)}&quot;</h3>
+        <div class="field">
+          <span class="field-label">When to disable</span>
+          <div class="radio-row">
+            <label><input type="radio" name="d-when" value="now" checked> Now</label>
+            <label><input type="radio" name="d-when" value="later"> Later</label>
+          </div>
+          <input type="datetime-local" id="d-from" class="input" disabled>
+        </div>
+        <div class="field">
+          <span class="field-label">For how long</span>
+          <div class="radio-row">
+            <label><input type="radio" name="d-for" value="timespan" checked> Timespan</label>
+            <label><input type="radio" name="d-for" value="until"> Until</label>
+          </div>
+          <div id="d-timespan-group" class="field-row">
+            <input type="number" id="d-duration" class="input" value="1" min="1" style="width:100px">
+            <select id="d-unit" class="select" style="width:auto">
+              <option value="1">minute(s)</option>
+              <option value="60" selected>hour(s)</option>
+              <option value="1440">day(s)</option>
+            </select>
+          </div>
+          <input type="datetime-local" id="d-until" class="input" style="display:none" disabled>
+        </div>
+        <div class="field">
+          <label for="d-reason">Reason (optional)</label>
+          <input type="text" id="d-reason" class="input" placeholder="e.g. maintenance">
+        </div>
+        <div class="form-row modal-actions">
+          <button class="button secondary" id="d-cancel" type="button">Cancel</button>
+          <button class="button warning" id="d-confirm" type="button">Disable</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    const whenRadios = overlay.querySelectorAll('input[name="d-when"]');
+    const forRadios = overlay.querySelectorAll('input[name="d-for"]');
+    const fromInput = overlay.querySelector("#d-from");
+    const timespanGroup = overlay.querySelector("#d-timespan-group");
+    const untilInput = overlay.querySelector("#d-until");
+
+    function updateWhen() {
+      const val = overlay.querySelector('input[name="d-when"]:checked').value;
+      fromInput.disabled = val !== "later";
+      if (val === "now") fromInput.value = "";
+    }
+
+    function updateFor() {
+      const val = overlay.querySelector('input[name="d-for"]:checked').value;
+      timespanGroup.style.display = val === "timespan" ? "flex" : "none";
+      untilInput.style.display = val === "until" ? "" : "none";
+      untilInput.disabled = val !== "until";
+      if (val === "timespan") untilInput.value = "";
+    }
+
+    whenRadios.forEach(r => r.addEventListener("change", updateWhen));
+    forRadios.forEach(r => r.addEventListener("change", updateFor));
+    updateFor();
+
+    overlay.querySelector("#d-confirm").addEventListener("click", () => {
+      const when = overlay.querySelector('input[name="d-when"]:checked').value;
+      const forVal = overlay.querySelector('input[name="d-for"]:checked').value;
+      const reason = overlay.querySelector("#d-reason").value.trim() || null;
+
+      if (when === "later" && !fromInput.value) {
+        setNotice("Please select a date and time for the disable.", true);
+        return;
+      }
+      if (forVal === "until" && !untilInput.value) {
+        setNotice("Please select a date and time for the end.", true);
+        return;
+      }
+      if (forVal === "timespan") {
+        const val = parseInt(overlay.querySelector("#d-duration").value);
+        if (!val || val < 1) {
+          setNotice("Please enter a valid duration.", true);
+          return;
+        }
+      }
+
+      const body = { reason };
+
+      if (when === "later") {
+        body.startAtUtc = new Date(fromInput.value).toISOString();
+      }
+
+      if (forVal === "timespan") {
+        const val = parseInt(overlay.querySelector("#d-duration").value) || 1;
+        const unit = parseInt(overlay.querySelector("#d-unit").value);
+        body.durationMinutes = val * unit;
+      } else {
+        body.untilUtc = new Date(untilInput.value).toISOString();
+      }
+
+      overlay.remove();
+      resolve(body);
+    });
+
+    overlay.querySelector("#d-cancel").addEventListener("click", () => {
+      overlay.remove();
+      reject(new Error("Cancelled"));
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        reject(new Error("Cancelled"));
+      }
+    });
+  });
 }
 
 boot();
