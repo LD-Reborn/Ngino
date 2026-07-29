@@ -16,6 +16,14 @@ try
         Console.WriteLine("  WARNING: server TLS certificate validation is disabled");
     }
 
+    if (options.UseLlamaCppViaDocker)
+    {
+        Console.WriteLine($"  llama.cpp via Docker: enabled");
+        Console.WriteLine($"  ollama models path: {options.UseOllamaModelsPath ?? "(not set)"}");
+        Console.WriteLine($"  llama.cpp docker image: {options.LlamaCppDockerImage ?? "(auto)"}");
+        Console.WriteLine($"  llama.cpp base port: {options.LlamaCppBasePort}");
+    }
+
     // Args are parsed by ClientOptions; keep them away from the host configuration.
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
     builder.Services.AddSingleton(options);

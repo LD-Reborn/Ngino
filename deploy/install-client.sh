@@ -16,6 +16,10 @@ TOKEN=""
 CLIENT_ID="$(hostname -s 2>/dev/null || echo "linux-client")"
 UPSTREAM="$DEFAULT_UPSTREAM"
 SKIP_OLLAMA=false
+USE_LLAMA_CPP_VIA_DOCKER=false
+USE_OLLAMA_MODELS_PATH=""
+LLAMA_CPP_DOCKER_IMAGE=""
+LLAMA_CPP_BASE_PORT=""
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -45,11 +49,21 @@ Optional:
   --install-dir <dir>  Install directory; defaults to $DEFAULT_INSTALL_DIR
   --service-name <n>   systemd service name; defaults to $DEFAULT_SERVICE_NAME
   --no-ollama          Skip Ollama installation and status check
+  --use-llama-cpp-via-docker
+                       Use llama.cpp via Docker for inference instead of Ollama
+  --use-ollama-models-path <dir>
+                       Path to Ollama models directory (manifests/blobs); required with --use-llama-cpp-via-docker
+  --llama-cpp-docker-image <img>
+                       llama.cpp Docker image; defaults to auto-detected (rocm/cuda/cpu)
+  --llama-cpp-base-port <num>
+                       Base port for llama.cpp containers; defaults to 8081
   -h, --help           Show this help message
 
 Examples:
   $0 --server http://gpu-server:5050 --token "my-secret"
   $0 --server http://gpu-server:5050 --token "my-secret" --no-ollama
+  $0 --server http://gpu-server:5050 --token "my-secret" \\
+     --use-llama-cpp-via-docker --use-ollama-models-path /usr/share/ollama/.ollama/models
 EOF
     exit 0
 }
@@ -57,15 +71,19 @@ EOF
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --server)       SERVER_URL="$2"; shift 2 ;;
-        --token)        TOKEN="$2"; shift 2 ;;
-        --client-id)    CLIENT_ID="$2"; shift 2 ;;
-        --upstream)     UPSTREAM="$2"; shift 2 ;;
-        --install-dir)  INSTALL_DIR="$2"; shift 2 ;;
-        --service-name) SERVICE_NAME="$2"; shift 2 ;;
-        --no-ollama)    SKIP_OLLAMA=true; shift ;;
-        -h|--help)      usage ;;
-        *)              die "Unknown option: $1" ;;
+        --server)                   SERVER_URL="$2"; shift 2 ;;
+        --token)                    TOKEN="$2"; shift 2 ;;
+        --client-id)                CLIENT_ID="$2"; shift 2 ;;
+        --upstream)                 UPSTREAM="$2"; shift 2 ;;
+        --install-dir)              INSTALL_DIR="$2"; shift 2 ;;
+        --service-name)             SERVICE_NAME="$2"; shift 2 ;;
+        --no-ollama)                SKIP_OLLAMA=true; shift ;;
+        --use-llama-cpp-via-docker) USE_LLAMA_CPP_VIA_DOCKER=true; shift ;;
+        --use-ollama-models-path)   USE_OLLAMA_MODELS_PATH="$2"; shift 2 ;;
+        --llama-cpp-docker-image)   LLAMA_CPP_DOCKER_IMAGE="$2"; shift 2 ;;
+        --llama-cpp-base-port)      LLAMA_CPP_BASE_PORT="$2"; shift 2 ;;
+        -h|--help)                  usage ;;
+        *)                          die "Unknown option: $1" ;;
     esac
 done
 
@@ -83,6 +101,13 @@ if [[ -z "$TOKEN" ]]; then
 fi
 if [[ -z "$TOKEN" ]]; then
     die "Token is required."
+fi
+
+if [[ "$USE_LLAMA_CPP_VIA_DOCKER" == "true" && -z "$USE_OLLAMA_MODELS_PATH" ]]; then
+    read -rp "Ollama models path (e.g. /usr/share/ollama/.ollama/models): " USE_OLLAMA_MODELS_PATH
+fi
+if [[ "$USE_LLAMA_CPP_VIA_DOCKER" == "true" && -z "$USE_OLLAMA_MODELS_PATH" ]]; then
+    die "Ollama models path is required with --use-llama-cpp-via-docker."
 fi
 
 # ── Root check ────────────────────────────────────────────────────────────────
@@ -265,7 +290,21 @@ info "Client installed to $INSTALL_DIR."
 # ── Write environment file (avoids shell injection in unit file) ─────────────
 ENV_DIR="/etc/ngino-client"
 mkdir -p "$ENV_DIR"
-printf 'NGINO_TOKEN=%s\n' "$TOKEN" > "$ENV_DIR/env"
+{
+    printf 'NGINO_TOKEN=%s\n' "$TOKEN"
+    if [[ "$USE_LLAMA_CPP_VIA_DOCKER" == "true" ]]; then
+        printf 'NGINO_USE_LLAMA_CPP_VIA_DOCKER=true\n'
+        if [[ -n "$USE_OLLAMA_MODELS_PATH" ]]; then
+            printf 'NGINO_USE_OLLAMA_MODELS_PATH=%s\n' "$USE_OLLAMA_MODELS_PATH"
+        fi
+        if [[ -n "$LLAMA_CPP_DOCKER_IMAGE" ]]; then
+            printf 'NGINO_LLAMA_CPP_DOCKER_IMAGE=%s\n' "$LLAMA_CPP_DOCKER_IMAGE"
+        fi
+        if [[ -n "$LLAMA_CPP_BASE_PORT" ]]; then
+            printf 'NGINO_LLAMA_CPP_BASE_PORT=%s\n' "$LLAMA_CPP_BASE_PORT"
+        fi
+    fi
+} > "$ENV_DIR/env"
 chmod 600 "$ENV_DIR/env"
 info "Environment file written to $ENV_DIR/env (mode 0600)."
 
@@ -280,8 +319,8 @@ fi
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Ngino Tunnel Client
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 $([ "$SKIP_OLLAMA" = "false" ] && echo "After=ollama.service")
 $([ "$SKIP_OLLAMA" = "false" ] && echo "Wants=ollama.service")
 
@@ -318,6 +357,9 @@ echo "  Client ID:   $CLIENT_ID"
 echo "  Upstream:    $UPSTREAM"
 echo "  Service:     $SERVICE_NAME"
 echo "  Install dir: $INSTALL_DIR"
+if [[ "$USE_LLAMA_CPP_VIA_DOCKER" == "true" ]]; then
+    echo "  llama.cpp:   enabled (models: $USE_OLLAMA_MODELS_PATH)"
+fi
 echo
 echo "  Manage:  systemctl {start|stop|restart|status} $SERVICE_NAME"
 echo "  Logs:    journalctl -u $SERVICE_NAME -f"

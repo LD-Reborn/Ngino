@@ -19,7 +19,8 @@ internal sealed class UpstreamRequest
         "Trailer",
         "Transfer-Encoding",
         "Upgrade",
-        ProtocolConstants.TokenHeader
+        ProtocolConstants.TokenHeader,
+        ProtocolConstants.ModelHeader
     };
 
     private readonly CancellationTokenSource _cancellationTokenSource;
@@ -33,7 +34,7 @@ internal sealed class UpstreamRequest
     private readonly HttpClient _httpClient;
     private readonly TunnelMessage _initialMessage;
     private readonly Action<string> _onComplete;
-    private readonly ClientOptions _options;
+    private readonly Uri _upstream;
     private readonly Func<TunnelMessage, CancellationToken, Task> _sendAsync;
 
     public UpstreamRequest(
@@ -42,13 +43,14 @@ internal sealed class UpstreamRequest
         TunnelMessage initialMessage,
         Func<TunnelMessage, CancellationToken, Task> sendAsync,
         Action<string> onComplete,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Uri? effectiveUpstream = null)
     {
-        _options = options;
         _httpClient = httpClient;
         _initialMessage = initialMessage;
         _sendAsync = sendAsync;
         _onComplete = onComplete;
+        _upstream = effectiveUpstream ?? options.Upstream;
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         if (!initialMessage.HasBody)
@@ -110,10 +112,29 @@ internal sealed class UpstreamRequest
         }
     }
 
+    public static string? ExtractModelName(TunnelMessage message)
+    {
+        if (message.Headers is null)
+        {
+            return null;
+        }
+
+        foreach (var header in message.Headers)
+        {
+            if (string.Equals(header.Name, ProtocolConstants.ModelHeader, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(header.Value))
+            {
+                return header.Value;
+            }
+        }
+
+        return null;
+    }
+
     private HttpRequestMessage BuildHttpRequest()
     {
         var method = new HttpMethod(_initialMessage.Method ?? HttpMethod.Get.Method);
-        var request = new HttpRequestMessage(method, BuildUpstreamUri(_options.Upstream, _initialMessage.PathAndQuery));
+        var request = new HttpRequestMessage(method, BuildUpstreamUri(_upstream, _initialMessage.PathAndQuery));
 
         if (_initialMessage.HasBody)
         {
@@ -185,7 +206,7 @@ internal sealed class UpstreamRequest
     private async Task SendResponseBodyAsync(HttpResponseMessage response)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(_cancellationTokenSource.Token);
-        var buffer = new byte[_options.ChunkSize];
+        var buffer = new byte[_upstream switch { _ => 64 * 1024 }];
 
         while (true)
         {

@@ -20,6 +20,14 @@ internal sealed class ClientOptions
 
     public bool InsecureSkipTlsVerify { get; init; }
 
+    public bool UseLlamaCppViaDocker { get; init; }
+
+    public string? UseOllamaModelsPath { get; init; }
+
+    public string? LlamaCppDockerImage { get; init; }
+
+    public int LlamaCppBasePort { get; init; } = 8081;
+
     public Uri TunnelUri
     {
         get
@@ -56,21 +64,29 @@ internal sealed class ClientOptions
             ClientId = Read(values, "client-id", "NGINO_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
             ReconnectDelay = TimeSpan.FromSeconds(ReadInt(values, 5, "reconnect-delay", "NGINO_RECONNECT_DELAY_SECONDS")),
             ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "NGINO_CHUNK_SIZE"),
-            InsecureSkipTlsVerify = ReadBool(values, false, "insecure-skip-tls-verify", "NGINO_INSECURE_SKIP_TLS_VERIFY")
+            InsecureSkipTlsVerify = ReadBool(values, false, "insecure-skip-tls-verify", "NGINO_INSECURE_SKIP_TLS_VERIFY"),
+            UseLlamaCppViaDocker = ReadBool(values, false, "use-llama-cpp-via-docker", "NGINO_USE_LLAMA_CPP_VIA_DOCKER"),
+            UseOllamaModelsPath = NormalizeDirectoryPath(Read(values, "use-ollama-models-path", "NGINO_USE_OLLAMA_MODELS_PATH")),
+            LlamaCppDockerImage = Read(values, "llama-cpp-docker-image", "NGINO_LLAMA_CPP_DOCKER_IMAGE"),
+            LlamaCppBasePort = ReadInt(values, 8081, "llama-cpp-base-port", "NGINO_LLAMA_CPP_BASE_PORT")
         };
     }
 
     public static string Usage =>
         """
         Ngino.Client options:
-          --server <url>             Server base URL, e.g. http://my-server:5050
-          --upstream <url>           Local upstream URL, e.g. http://localhost:11434
-          --token <value>            Optional token matching the server
-          --client-id <name>         Identifies this machine on the server; defaults to the machine name
-          --tunnel-path <path>       Defaults to /_ngino/tunnel
-          --reconnect-delay <sec>    Defaults to 5
-          --chunk-size <bytes>       Defaults to 65536
-          --insecure-skip-tls-verify Disable server TLS certificate validation (unsafe)
+          --server <url>                 Server base URL, e.g. http://my-server:5050
+          --upstream <url>               Local upstream URL, e.g. http://localhost:11434
+          --token <value>                Optional token matching the server
+          --client-id <name>             Identifies this machine on the server; defaults to the machine name
+          --tunnel-path <path>           Defaults to /_ngino/tunnel
+          --reconnect-delay <sec>        Defaults to 5
+          --chunk-size <bytes>           Defaults to 65536
+          --insecure-skip-tls-verify     Disable server TLS certificate validation (unsafe)
+          --use-llama-cpp-via-docker     Use llama.cpp via Docker for inference instead of Ollama
+          --use-ollama-models-path <dir> Path to Ollama models directory (manifests/blobs), required with --use-llama-cpp-via-docker
+          --llama-cpp-docker-image <img> llama.cpp Docker image; defaults to auto-detected (rocm/cuda/cpu)
+          --llama-cpp-base-port <num>    Base port for llama.cpp containers; defaults to 8081
         """;
 
     private static Dictionary<string, string> ParseArgs(string[] args)
@@ -92,7 +108,7 @@ internal sealed class ClientOptions
                 continue;
             }
 
-            if (keyValue[0].Equals("insecure-skip-tls-verify", StringComparison.OrdinalIgnoreCase))
+            if (IsBoolFlag(keyValue[0]))
             {
                 values[keyValue[0]] = "true";
                 continue;
@@ -107,6 +123,16 @@ internal sealed class ClientOptions
         }
 
         return values;
+    }
+
+    private static bool IsBoolFlag(string key)
+    {
+        return key switch
+        {
+            "insecure-skip-tls-verify" => true,
+            "use-llama-cpp-via-docker" => true,
+            _ => false
+        };
     }
 
     private static string? Read(Dictionary<string, string> values, params string[] keys)
@@ -154,4 +180,14 @@ internal sealed class ClientOptions
 
     private static string NormalizePath(string path) =>
         path.StartsWith('/') ? path : $"/{path}";
+
+    private static string? NormalizeDirectoryPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        return Path.GetFullPath(path);
+    }
 }

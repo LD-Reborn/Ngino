@@ -21,6 +21,7 @@ internal sealed class TunnelClient
     private readonly ILogger<TunnelClient> _logger;
     private readonly object _modelSnapshotLock = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly LlamaCppManager? _llamaCppManager;
     private List<string> _lastActiveModels = [];
     private List<string> _lastModels = [];
 
@@ -32,10 +33,39 @@ internal sealed class TunnelClient
         {
             Timeout = Timeout.InfiniteTimeSpan
         };
+
+        if (_options.UseLlamaCppViaDocker)
+        {
+            if (string.IsNullOrWhiteSpace(_options.UseOllamaModelsPath))
+            {
+                throw new InvalidOperationException(
+                    "--use-ollama-models-path is required when --use-llama-cpp-via-docker is set.");
+            }
+
+            _llamaCppManager = new LlamaCppManager(
+                _options.UseOllamaModelsPath,
+                _options.LlamaCppDockerImage,
+                _options.LlamaCppBasePort,
+                _logger);
+        }
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        if (_llamaCppManager is not null)
+        {
+            _logger.LogInformation("Testing Docker availability...");
+            var dockerAvailable = await _llamaCppManager.TestDockerAsync();
+            if (!dockerAvailable)
+            {
+                _logger.LogWarning("Docker is not available. llama.cpp via Docker will not work.");
+            }
+            else
+            {
+                _logger.LogInformation("Docker is available. Using llama.cpp image: {Image}", _llamaCppManager.DockerImage);
+            }
+        }
+
         while (!cancellationToken.IsCancellationRequested)
         {
             using var socket = new ClientWebSocket();
@@ -154,6 +184,16 @@ internal sealed class TunnelClient
 
     private async Task<List<string>> GetUpstreamModelsAsync(CancellationToken cancellationToken)
     {
+        if (_llamaCppManager is not null)
+        {
+            var models = _llamaCppManager.DiscoverModelsWithBlob();
+            return models
+                .Select(m => m.OllamaName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/tags"));
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -166,6 +206,17 @@ internal sealed class TunnelClient
 
     private async Task<List<string>> GetActiveUpstreamModelsAsync(CancellationToken cancellationToken)
     {
+        if (_llamaCppManager is not null)
+        {
+            var models = _llamaCppManager.DiscoverModelsWithBlob();
+            return models
+                .Where(m => _llamaCppManager.IsModelActive(m.OllamaName))
+                .Select(m => m.OllamaName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/ps"));
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
@@ -363,6 +414,11 @@ internal sealed class TunnelClient
             throw new InvalidOperationException("Model command is missing a model name.");
         }
 
+        if (_llamaCppManager is not null)
+        {
+            return await ExecuteModelCommandWithLlamaCppAsync(message, cancellationToken);
+        }
+
         using var request = BuildModelCommandRequest(message);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
@@ -379,6 +435,118 @@ internal sealed class TunnelClient
         return BuildModelCommandResult(message.RequestId, response, body);
     }
 
+    private async Task<TunnelMessage> ExecuteModelCommandWithLlamaCppAsync(
+        TunnelMessage message, CancellationToken cancellationToken)
+    {
+        var modelName = message.Model?.Trim();
+        var normalizedCommand = NormalizeModelCommand(message.Command);
+
+        switch (normalizedCommand)
+        {
+            case "load":
+            {
+                var models = _llamaCppManager!.DiscoverModelsWithBlob();
+                var model = models.FirstOrDefault(m =>
+                    string.Equals(m.OllamaName, modelName, StringComparison.OrdinalIgnoreCase));
+
+                if (model is null)
+                {
+                    return new TunnelMessage
+                    {
+                        Type = TunnelMessageTypes.ModelCommandResult,
+                        RequestId = message.RequestId,
+                        StatusCode = 404,
+                        Error = $"Model '{modelName}' not found in Ollama models path."
+                    };
+                }
+
+                var started = await _llamaCppManager.StartModelContainerAsync(model, cancellationToken);
+                if (!started)
+                {
+                    return new TunnelMessage
+                    {
+                        Type = TunnelMessageTypes.ModelCommandResult,
+                        RequestId = message.RequestId,
+                        StatusCode = 500,
+                        Error = $"Failed to start llama.cpp container for model '{modelName}'."
+                    };
+                }
+
+                return BuildModelCommandResult(message.RequestId, 200, "OK", []);
+            }
+
+            case "unload":
+            {
+                var stopped = await _llamaCppManager!.StopModelContainerAsync(modelName!, cancellationToken);
+                if (!stopped)
+                {
+                    return new TunnelMessage
+                    {
+                        Type = TunnelMessageTypes.ModelCommandResult,
+                        RequestId = message.RequestId,
+                        StatusCode = 404,
+                        Error = $"No running llama.cpp container for model '{modelName}'."
+                    };
+                }
+
+                return BuildModelCommandResult(message.RequestId, 200, "OK", []);
+            }
+
+            case "pull":
+            case "delete":
+            {
+                using var request = BuildModelCommandRequest(_options.Upstream, message.Command, message.Model);
+                using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+                return BuildModelCommandResult(message.RequestId, response, body);
+            }
+
+            case "show":
+            {
+                var models = _llamaCppManager!.DiscoverModelsWithBlob();
+                var model = models.FirstOrDefault(m =>
+                    string.Equals(m.OllamaName, modelName, StringComparison.OrdinalIgnoreCase));
+
+                if (model is null)
+                {
+                    return new TunnelMessage
+                    {
+                        Type = TunnelMessageTypes.ModelCommandResult,
+                        RequestId = message.RequestId,
+                        StatusCode = 404,
+                        Error = $"Model '{modelName}' not found in Ollama models path."
+                    };
+                }
+
+                var showResponse = new
+                {
+                    modelfile = $"# llama.cpp via Docker\nFROM {model.BlobDigest}\n",
+                    details = new
+                    {
+                        format = "gguf",
+                        family = "llama",
+                        parameter_size = "",
+                        quantization_level = ""
+                    },
+                    model_info = new { }
+                };
+
+                var body = JsonSerializer.SerializeToUtf8Bytes(showResponse, JsonOptions);
+                return new TunnelMessage
+                {
+                    Type = TunnelMessageTypes.ModelCommandResult,
+                    RequestId = message.RequestId,
+                    StatusCode = 200,
+                    ReasonPhrase = "OK",
+                    Body = body
+                };
+            }
+
+            default:
+                throw new InvalidOperationException($"Unsupported model command '{message.Command}' with llama.cpp.");
+        }
+    }
+
     private static TunnelMessage BuildModelCommandResult(
         string requestId,
         HttpResponseMessage response,
@@ -390,6 +558,19 @@ internal sealed class TunnelClient
             RequestId = requestId,
             StatusCode = (int)response.StatusCode,
             ReasonPhrase = response.ReasonPhrase,
+            Body = body
+        };
+    }
+
+    private static TunnelMessage BuildModelCommandResult(
+        string requestId, int statusCode, string reasonPhrase, byte[] body)
+    {
+        return new TunnelMessage
+        {
+            Type = TunnelMessageTypes.ModelCommandResult,
+            RequestId = requestId,
+            StatusCode = statusCode,
+            ReasonPhrase = reasonPhrase,
             Body = body
         };
     }
@@ -491,13 +672,31 @@ internal sealed class TunnelClient
 
     private void StartRequest(ClientWebSocket socket, TunnelMessage message, CancellationToken cancellationToken)
     {
+        Uri? effectiveUpstream = null;
+
+        if (_llamaCppManager is not null)
+        {
+            var modelName = UpstreamRequest.ExtractModelName(message);
+            if (modelName is not null)
+            {
+                effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
+                if (effectiveUpstream is null)
+                {
+                    _logger.LogWarning(
+                        "Request for model '{Model}' but no llama.cpp container is running for it. Falling back to default upstream.",
+                        modelName);
+                }
+            }
+        }
+
         var request = new UpstreamRequest(
             _options,
             _httpClient,
             message,
             (response, token) => SendAsync(socket, response, token),
             requestId => _activeRequests.TryRemove(requestId, out _),
-            cancellationToken);
+            cancellationToken,
+            effectiveUpstream: effectiveUpstream);
 
         if (!_activeRequests.TryAdd(message.RequestId, request))
         {

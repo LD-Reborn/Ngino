@@ -14,7 +14,11 @@ param(
     [string]$InstallDir = "$env:ProgramFiles\Ngino Client",
     [string]$ServiceName = "NginoClient",
     [switch]$InsecureSkipTlsVerify,
-    [switch]$NoOllama
+    [switch]$NoOllama,
+    [switch]$UseLlamaCppViaDocker,
+    [string]$UseOllamaModelsPath = "",
+    [string]$LlamaCppDockerImage = "",
+    [int]$LlamaCppBasePort = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,6 +58,14 @@ if ([string]::IsNullOrWhiteSpace($Token)) {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer) }
 }
 if ([string]::IsNullOrWhiteSpace($Token)) { throw "Token is required." }
+
+if ($UseLlamaCppViaDocker -and [string]::IsNullOrWhiteSpace($UseOllamaModelsPath)) {
+    $UseOllamaModelsPath = Read-Host "Ollama models path (e.g. C:\Users\user\.ollama\models)"
+}
+if ($UseLlamaCppViaDocker -and [string]::IsNullOrWhiteSpace($UseOllamaModelsPath)) {
+    throw "Ollama models path is required with -UseLlamaCppViaDocker."
+}
+
 if ($ServiceName -notmatch '^[A-Za-z0-9_.-]+$') { throw "ServiceName contains unsupported characters." }
 
 $scriptDir = $PSScriptRoot
@@ -149,6 +161,18 @@ $serviceEnvironment = @(
     "DOTNET_CLI_TELEMETRY_OPTOUT=1",
     "DOTNET_NOLOGO=1"
 )
+if ($UseLlamaCppViaDocker) {
+    $serviceEnvironment += "NGINO_USE_LLAMA_CPP_VIA_DOCKER=true"
+    if (-not [string]::IsNullOrWhiteSpace($UseOllamaModelsPath)) {
+        $serviceEnvironment += "NGINO_USE_OLLAMA_MODELS_PATH=$UseOllamaModelsPath"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LlamaCppDockerImage)) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_DOCKER_IMAGE=$LlamaCppDockerImage"
+    }
+    if ($LlamaCppBasePort -gt 0) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_BASE_PORT=$LlamaCppBasePort"
+    }
+}
 if ($InsecureSkipTlsVerify) {
     Write-Warn "Server TLS certificate validation is disabled for $ServiceName."
 }
@@ -169,6 +193,9 @@ Write-Host "  Client ID:   $ClientId"
 Write-Host "  Upstream:    $Upstream"
 Write-Host "  Service:     $ServiceName"
 Write-Host "  Install dir: $InstallDir"
+if ($UseLlamaCppViaDocker) {
+    Write-Host "  llama.cpp:   enabled (models: $UseOllamaModelsPath)"
+}
 Write-Host ""
 Write-Host "  Manage:  Get-Service $ServiceName | Start-Service/Stop-Service/Restart-Service"
 Write-Host "  Logs:    Get-WinEvent -LogName Application | Where-Object ProviderName -eq NginoClient"

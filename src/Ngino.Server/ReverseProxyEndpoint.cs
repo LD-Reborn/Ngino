@@ -523,6 +523,12 @@ internal static class ReverseProxyEndpoint
                 Headers = CollectRequestHeaders(context.Request, settings, managementStore)
             };
 
+            if (!string.IsNullOrWhiteSpace(requestedModel))
+            {
+                requestMessage.Headers ??= [];
+                requestMessage.Headers.Add(new HeaderPair(ProtocolConstants.ModelHeader, requestedModel));
+            }
+
             await connection.SendAsync(requestMessage, context.RequestAborted);
             requestBodyTask = ForwardRequestBodyAsync(context.Request, connection, requestId, hasBody, settings, logger);
             _ = requestBodyTask.ContinueWith(
