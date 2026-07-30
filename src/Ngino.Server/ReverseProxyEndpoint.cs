@@ -373,14 +373,26 @@ internal static class ReverseProxyEndpoint
 
     private static string GetClientDisabledMessage(string clientId, ClientAccess access)
     {
+        var reason = string.IsNullOrWhiteSpace(access.DisabledReason)
+            ? ""
+            : $" Reason: {access.DisabledReason.Trim()}.";
+
         if (access.DisabledManually)
         {
-            return $"Tunnel client '{clientId}' is disabled until it is enabled manually.";
+            return $"Tunnel client '{clientId}' is disabled until it is enabled manually.{reason}";
         }
 
-        return access.DisabledUntilUtc is { } disabledUntil
-            ? $"Tunnel client '{clientId}' is disabled until {disabledUntil:O}."
-            : $"Tunnel client '{clientId}' is disabled.";
+        if (access.DisabledUntilUtc is { } disabledUntil)
+        {
+            var from = access.DisabledFromUtc is { } fromUtc
+                ? $" (scheduled from {fromUtc:O})"
+                : "";
+            return $"Tunnel client '{clientId}' is disabled until {disabledUntil:O}.{from}{reason}";
+        }
+
+        return access.DisabledFromUtc is { } fromUtc2
+            ? $"Tunnel client '{clientId}' is disabled (scheduled from {fromUtc2:O}).{reason}"
+            : $"Tunnel client '{clientId}' is disabled.{reason}";
     }
 
     private static async Task<string?> GetRequestedModelAsync(HttpRequest request, PathString proxyPath)
