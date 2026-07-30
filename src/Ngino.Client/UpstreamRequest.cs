@@ -36,6 +36,10 @@ internal sealed class UpstreamRequest
     private readonly Action<string> _onComplete;
     private readonly Uri _upstream;
     private readonly Func<TunnelMessage, CancellationToken, Task> _sendAsync;
+    private readonly Func<HttpResponseMessage, CancellationToken, Task>? _responseHandler;
+    private readonly Func<string, string?>? _pathTransform;
+    private readonly Func<byte[], byte[]>? _bodyTransform;
+    private readonly List<byte[]> _bufferedBody = [];
 
     public UpstreamRequest(
         ClientOptions options,
@@ -44,13 +48,19 @@ internal sealed class UpstreamRequest
         Func<TunnelMessage, CancellationToken, Task> sendAsync,
         Action<string> onComplete,
         CancellationToken cancellationToken,
-        Uri? effectiveUpstream = null)
+        Uri? effectiveUpstream = null,
+        Func<HttpResponseMessage, CancellationToken, Task>? responseHandler = null,
+        Func<string, string?>? pathTransform = null,
+        Func<byte[], byte[]>? bodyTransform = null)
     {
         _httpClient = httpClient;
         _initialMessage = initialMessage;
         _sendAsync = sendAsync;
         _onComplete = onComplete;
         _upstream = effectiveUpstream ?? options.Upstream;
+        _responseHandler = responseHandler;
+        _pathTransform = pathTransform;
+        _bodyTransform = bodyTransform;
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         if (!initialMessage.HasBody)
@@ -63,12 +73,36 @@ internal sealed class UpstreamRequest
     {
         if (body.Length > 0)
         {
-            _requestBody.Writer.TryWrite(body);
+            if (_bodyTransform is not null)
+            {
+                _bufferedBody.Add(body);
+            }
+            else
+            {
+                _requestBody.Writer.TryWrite(body);
+            }
         }
     }
 
-    public void CompleteBody() =>
+    public void CompleteBody()
+    {
+        if (_bodyTransform is not null && _bufferedBody.Count > 0)
+        {
+            var totalLength = _bufferedBody.Sum(b => b.Length);
+            var concatenated = new byte[totalLength];
+            var offset = 0;
+            foreach (var chunk in _bufferedBody)
+            {
+                chunk.CopyTo(concatenated, offset);
+                offset += chunk.Length;
+            }
+
+            var transformed = _bodyTransform(concatenated);
+            _requestBody.Writer.TryWrite(transformed);
+        }
+
         _requestBody.Writer.TryComplete();
+    }
 
     public void Cancel()
     {
@@ -86,16 +120,23 @@ internal sealed class UpstreamRequest
                 HttpCompletionOption.ResponseHeadersRead,
                 _cancellationTokenSource.Token);
 
-            await SendResponseHeadersAsync(response);
-            await SendResponseBodyAsync(response);
+            if (_responseHandler is not null)
+            {
+                await _responseHandler(response, _cancellationTokenSource.Token);
+            }
+            else
+            {
+                await SendResponseHeadersAsync(response);
+                await SendResponseBodyAsync(response);
 
-            await _sendAsync(
-                new TunnelMessage
-                {
-                    Type = TunnelMessageTypes.HttpResponseComplete,
-                    RequestId = _initialMessage.RequestId
-                },
-                _cancellationTokenSource.Token);
+                await _sendAsync(
+                    new TunnelMessage
+                    {
+                        Type = TunnelMessageTypes.HttpResponseComplete,
+                        RequestId = _initialMessage.RequestId
+                    },
+                    _cancellationTokenSource.Token);
+            }
         }
         catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
         {
@@ -133,8 +174,18 @@ internal sealed class UpstreamRequest
 
     private HttpRequestMessage BuildHttpRequest()
     {
+        var path = _initialMessage.PathAndQuery ?? "/";
+        if (_pathTransform is not null)
+        {
+            var transformed = _pathTransform(path);
+            if (transformed is not null)
+            {
+                path = transformed;
+            }
+        }
+
         var method = new HttpMethod(_initialMessage.Method ?? HttpMethod.Get.Method);
-        var request = new HttpRequestMessage(method, BuildUpstreamUri(_upstream, _initialMessage.PathAndQuery));
+        var request = new HttpRequestMessage(method, BuildUpstreamUri(_upstream, path));
 
         if (_initialMessage.HasBody)
         {

@@ -109,6 +109,17 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         var port = FindAvailablePort();
         var containerName = SanitizeContainerName($"ngino-llamacpp-{ollamaName}");
 
+        var existingPort = await FindExistingContainerPortAsync(containerName);
+        if (existingPort.HasValue)
+        {
+            _logger.LogInformation(
+                "Reusing existing container for {Model} on port {Port}", ollamaName, existingPort.Value);
+            _modelPorts[ollamaName] = existingPort.Value;
+            return true;
+        }
+
+        await RunDockerAsync(["rm", "-f", containerName], CancellationToken.None);
+
         var args = BuildDockerRunArgs(containerName, model, port);
         _logger.LogInformation(
             "Starting llama.cpp container for {Model} on port {Port}: docker {Args}",
@@ -334,6 +345,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         }
 
         args.Add(_dockerImage);
+        args.Add("--embeddings");
         args.Add("-m");
         args.Add($"/models/blobs/{blobFile}");
         args.Add("-ngl");
@@ -346,6 +358,56 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         args.Add(port.ToString());
 
         return [.. args];
+    }
+
+    private async Task<int?> FindExistingContainerPortAsync(string containerName)
+    {
+        var (exitCode, output) = await RunDockerWithOutputAsync(
+            ["ps", "--filter", $"name=^{containerName}$", "--format", "{{.Ports}}"],
+            CancellationToken.None);
+
+        if (exitCode != 0 || string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var port = ParseHostPort(line);
+            if (port.HasValue)
+            {
+                return port;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? ParseHostPort(string ports)
+    {
+        foreach (var mapping in ports.Split(','))
+        {
+            var trimmed = mapping.Trim();
+            var arrowIndex = trimmed.IndexOf("->", StringComparison.Ordinal);
+            if (arrowIndex < 0)
+            {
+                continue;
+            }
+
+            var hostPart = trimmed[..arrowIndex].Trim();
+            var colonIndex = hostPart.LastIndexOf(':');
+            if (colonIndex < 0)
+            {
+                continue;
+            }
+
+            if (int.TryParse(hostPart[(colonIndex + 1)..], out var port))
+            {
+                return port;
+            }
+        }
+
+        return null;
     }
 
     private int FindAvailablePort()
@@ -393,10 +455,9 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
 
         var readOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var readError = process.StandardError.ReadToEndAsync(cancellationToken);
+        var waitTask = process.WaitForExitAsync(cancellationToken);
 
-        var completed = await Task.WhenAny(
-            process.WaitForExitAsync(cancellationToken),
-            Task.Delay(DockerTimeout, cancellationToken));
+        var completed = await Task.WhenAny(waitTask, Task.Delay(DockerTimeout, cancellationToken));
 
         string output;
         string error;
@@ -412,8 +473,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             error = "timed out";
         }
 
-        if (completed is Task { IsCompleted: true } delayTask
-            && delayTask != process.WaitForExitAsync(cancellationToken))
+        if (completed != waitTask)
         {
             _logger.LogWarning("Docker command timed out: docker {Args}", string.Join(" ", args));
             try { process.Kill(entireProcessTree: true); } catch { }
@@ -443,7 +503,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         return "ghcr.io/ggml-org/llama.cpp:server";
     }
 
-    private static bool HasRocmDevices() => File.Exists("/dev/kfd") && File.Exists("/dev/dri");
+    private static bool HasRocmDevices() => File.Exists("/dev/kfd") && Directory.Exists("/dev/dri");
 
     private static bool HasNvidiaGpu()
     {

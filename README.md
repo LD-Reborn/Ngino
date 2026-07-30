@@ -132,6 +132,15 @@ sudo bash deploy/install-client.sh --server http://your-server:5050 --token "cha
 
 Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
 
+llama.cpp via Docker options (replaces Ollama for inferencing):
+
+| Option | Description |
+|--------|-------------|
+| `--use-llama-cpp-via-docker` | Use llama.cpp Docker containers instead of Ollama |
+| `--use-ollama-models-path <dir>` | Path to Ollama models directory (`manifests/blobs`); required with the flag above |
+| `--llama-cpp-docker-image <img>` | Docker image; defaults to auto-detected (rocm/cuda/cpu) |
+| `--llama-cpp-base-port <num>` | Base port for containers; defaults to `8081` |
+
 The script ensures .NET 10 and Ollama are installed, builds the client self-contained, installs it to `/opt/Ngino-client`, and creates a systemd service (`Ngino-client`). Logs: `journalctl -u Ngino-client -f`.
 
 ## Notes

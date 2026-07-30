@@ -16,6 +16,7 @@ internal sealed class TunnelClient
     private const string EmbeddingWarmupInput = "Ngino warmup";
 
     private readonly ConcurrentDictionary<string, UpstreamRequest> _activeRequests = new();
+    private readonly ConcurrentDictionary<string, PendingRequestBody> _pendingRequestBodies = new();
     private readonly HttpClient _httpClient;
     private readonly ClientOptions _options;
     private readonly ILogger<TunnelClient> _logger;
@@ -341,13 +342,18 @@ internal sealed class TunnelClient
         switch (message.Type)
         {
             case TunnelMessageTypes.HttpRequest:
-                StartRequest(socket, message, cancellationToken);
+                _pendingRequestBodies[message.RequestId] = new PendingRequestBody();
+                _ = Task.Run(() => StartRequest(socket, message, cancellationToken), cancellationToken);
                 break;
 
             case TunnelMessageTypes.HttpRequestBody:
                 if (_activeRequests.TryGetValue(message.RequestId, out var requestWithBody))
                 {
                     requestWithBody.AddBody(message.Body ?? []);
+                }
+                else if (_pendingRequestBodies.TryGetValue(message.RequestId, out var pendingBody))
+                {
+                    pendingBody.AddBody(message.Body ?? []);
                 }
                 break;
 
@@ -356,12 +362,20 @@ internal sealed class TunnelClient
                 {
                     completedRequest.CompleteBody();
                 }
+                else if (_pendingRequestBodies.TryGetValue(message.RequestId, out var pendingBody))
+                {
+                    pendingBody.Complete();
+                }
                 break;
 
             case TunnelMessageTypes.Cancel:
                 if (_activeRequests.TryRemove(message.RequestId, out var cancelledRequest))
                 {
                     cancelledRequest.Cancel();
+                }
+                else
+                {
+                    _pendingRequestBodies.TryRemove(message.RequestId, out _);
                 }
                 break;
 
@@ -670,23 +684,76 @@ internal sealed class TunnelClient
     private static StringContent JsonContent<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOptions), Encoding.UTF8, "application/json");
 
-    private void StartRequest(ClientWebSocket socket, TunnelMessage message, CancellationToken cancellationToken)
+    private async Task StartRequest(ClientWebSocket socket, TunnelMessage message, CancellationToken cancellationToken)
     {
         Uri? effectiveUpstream = null;
+        var modelName = UpstreamRequest.ExtractModelName(message);
 
         if (_llamaCppManager is not null)
         {
-            var modelName = UpstreamRequest.ExtractModelName(message);
             if (modelName is not null)
             {
                 effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
                 if (effectiveUpstream is null)
                 {
-                    _logger.LogWarning(
-                        "Request for model '{Model}' but no llama.cpp container is running for it. Falling back to default upstream.",
+                    _logger.LogInformation(
+                        "Request for model '{Model}' but no llama.cpp container is running. Starting one on demand...",
                         modelName);
+
+                    var model = _llamaCppManager.DiscoverModelsWithBlob()
+                        .FirstOrDefault(m => string.Equals(m.OllamaName, modelName, StringComparison.OrdinalIgnoreCase));
+
+                    if (model is not null)
+                    {
+                        var started = await _llamaCppManager.StartModelContainerAsync(model, cancellationToken);
+                        if (started)
+                        {
+                            effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
+                        }
+                    }
+
+                    if (effectiveUpstream is null)
+                    {
+                        _logger.LogWarning(
+                            "Failed to start llama.cpp container for model '{Model}'. Falling back to default upstream.",
+                            modelName);
+                    }
                 }
             }
+        }
+
+        // When llama.cpp backend is active, set up request/response translation
+        Func<string, string?>? pathTransform = null;
+        Func<byte[], byte[]>? bodyTransform = null;
+        Func<HttpResponseMessage, CancellationToken, Task>? responseHandler = null;
+        string? translatorModelName = null;
+
+        if (_llamaCppManager is not null && effectiveUpstream is not null && modelName is not null)
+        {
+            var translator = new OllamaToLlamaCppTranslator(modelName, _logger);
+            translatorModelName = modelName;
+            bool originalRequestedStream = true;
+
+            pathTransform = path =>
+            {
+                if (translator.TryTranslatePath(message.Method ?? "GET", path, out var newPath))
+                {
+                    return newPath;
+                }
+                return null;
+            };
+
+            bodyTransform = body =>
+            {
+                originalRequestedStream = OllamaToLlamaCppTranslator.ExtractOriginalStream(body, message.PathAndQuery ?? "/");
+                return translator.TranslateBody(message.PathAndQuery ?? "/", body);
+            };
+
+            responseHandler = translator.CreateResponseHandler(
+                (response, token) => SendAsync(socket, response, token),
+                message.RequestId,
+                message.PathAndQuery ?? "/",
+                () => originalRequestedStream);
         }
 
         var request = new UpstreamRequest(
@@ -696,7 +763,10 @@ internal sealed class TunnelClient
             (response, token) => SendAsync(socket, response, token),
             requestId => _activeRequests.TryRemove(requestId, out _),
             cancellationToken,
-            effectiveUpstream: effectiveUpstream);
+            effectiveUpstream: effectiveUpstream,
+            responseHandler: responseHandler,
+            pathTransform: pathTransform,
+            bodyTransform: bodyTransform);
 
         if (!_activeRequests.TryAdd(message.RequestId, request))
         {
@@ -709,10 +779,16 @@ internal sealed class TunnelClient
                     Error = "Duplicate request id."
                 },
                 cancellationToken);
+            _pendingRequestBodies.TryRemove(message.RequestId, out _);
             return;
         }
 
-        _ = Task.Run(request.RunAsync, cancellationToken);
+        if (_pendingRequestBodies.TryRemove(message.RequestId, out var pendingBody))
+        {
+            pendingBody.TransferTo(request);
+        }
+
+        await request.RunAsync();
     }
 
     private async Task SendAsync(ClientWebSocket socket, TunnelMessage message, CancellationToken cancellationToken)
@@ -738,6 +814,52 @@ internal sealed class TunnelClient
             if (_activeRequests.TryRemove(pair.Key, out var request))
             {
                 request.Cancel();
+            }
+        }
+
+        _pendingRequestBodies.Clear();
+    }
+}
+
+internal sealed class PendingRequestBody
+{
+    private readonly List<byte[]> _chunks = [];
+    private bool _completed;
+    private readonly object _lock = new();
+
+    public void AddBody(byte[] chunk)
+    {
+        if (chunk.Length == 0)
+            return;
+
+        lock (_lock)
+        {
+            _chunks.Add(chunk);
+        }
+    }
+
+    public void Complete()
+    {
+        lock (_lock)
+        {
+            _completed = true;
+        }
+    }
+
+    public void TransferTo(UpstreamRequest request)
+    {
+        lock (_lock)
+        {
+            foreach (var chunk in _chunks)
+            {
+                request.AddBody(chunk);
+            }
+
+            _chunks.Clear();
+
+            if (_completed)
+            {
+                request.CompleteBody();
             }
         }
     }

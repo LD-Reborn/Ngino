@@ -279,6 +279,14 @@ fi
 
 info "Build successful."
 
+# ── Stop existing service before overwriting binary ─────────────────────────
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+if systemctl list-unit-files "$SERVICE_NAME.service" &>/dev/null 2>&1 || systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    info "Stopping existing service $SERVICE_NAME..."
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+fi
+
 # ── Install ───────────────────────────────────────────────────────────────────
 info "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
@@ -310,11 +318,6 @@ info "Environment file written to $ENV_DIR/env (mode 0600)."
 
 # ── Create systemd service ───────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-
-if systemctl list-unit-files "$SERVICE_NAME.service" &>/dev/null 2>&1; then
-    info "Stopping existing service $SERVICE_NAME..."
-    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-fi
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
