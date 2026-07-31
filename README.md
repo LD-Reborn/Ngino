@@ -1,8 +1,8 @@
 # Ngino
 
-Ngino is a small outbound HTTP tunnel for running Ollama (or vLLM, etc.) on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
+Ngino is a small outbound HTTP tunnel for running Ollama, llama.cpp, vLLM, etc. on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
 
-The client opens and maintains a WebSocket connection to the server. The server accepts normal HTTP requests and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
+The client opens and maintains a WebSocket connection to the server. The server accepts normal HTTP requests from users and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
 
 <table>
 <tr>
@@ -15,8 +15,8 @@ The server provides
 - An API with
   - Authentication via user keys
   - Authorization (planned)
-- Load balancing (Scale your AI strategy horizontally!)
-- (Ollama-only) Model management (install, remove, load, unload models)
+- Load balancing (Scale your AI inferencing horizontally by adding more nodes!)
+- (Ollama-based) GGUF Model management (install, remove, load, unload models)
 - Client monitoring
   - Who is active
   - What models are running
@@ -128,6 +128,14 @@ Linux:
 
 ```bash
 sudo bash deploy/install-client.sh --server http://your-server:5050 --token "change-me"
+```
+or using ollama models with llama.cpp backend using ROCm:
+```bash
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-rocm   --llama-cpp-base-port 8081
+```
+or using ollama models with llama.cpp backend using CUDA:
+```bash
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-cuda   --llama-cpp-base-port 8081
 ```
 
 Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
