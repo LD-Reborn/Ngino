@@ -1,6 +1,8 @@
-# Ngino
+# <img src="docs/images/Ngino_logo_symbol.png" width="25" alt="logo symbol"/> Ngino
 
 Ngino is a small outbound HTTP tunnel for running Ollama, llama.cpp, vLLM, etc. on GPU workstations while exposing the API from a server that cannot reach those workstations directly.
+
+<img src="docs/images/Ngino_logo_full.png" alt="logo symbol"/>
 
 The client opens and maintains a WebSocket connection to the server. The server accepts normal HTTP requests from users and forwards them through that WebSocket to the client. The client then calls a local upstream such as `http://localhost:11434` and streams the response back.
 
