@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -13,6 +15,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
     private const int DefaultBasePort = 8081;
     private const string NginoContainerLabel = "ngino-llamacpp";
     private static readonly TimeSpan DockerTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ContainerStartTimeout = TimeSpan.FromMinutes(5);
 
     private readonly string _blobsPath;
     private readonly string _manifestsPath;
@@ -73,6 +76,43 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
     public bool IsModelActive(string ollamaModelName)
     {
         return _modelPorts.ContainsKey(ollamaModelName);
+    }
+
+    public async Task<bool> IsContainerRunningAsync(string ollamaModelName)
+    {
+        if (!_modelPorts.ContainsKey(ollamaModelName))
+        {
+            return false;
+        }
+
+        var containerName = SanitizeContainerName($"ngino-llamacpp-{ollamaModelName}");
+        var (exitCode, output) = await RunDockerWithOutputAsync(
+            ["ps", "--filter", $"name=^{containerName}$", "--format", "{{.ID}}"],
+            CancellationToken.None);
+
+        var running = exitCode == 0 && !string.IsNullOrWhiteSpace(output);
+        if (!running)
+        {
+            _logger.LogWarning(
+                "llama.cpp container {ContainerName} is no longer running. Invalidating cached port for {Model}.",
+                containerName, ollamaModelName);
+            _modelPorts.TryRemove(ollamaModelName, out _);
+        }
+
+        return running;
+    }
+
+    public bool RemoveModelMapping(string ollamaModelName)
+    {
+        if (_modelPorts.TryRemove(ollamaModelName, out var port))
+        {
+            _logger.LogWarning(
+                "Removed stale llama.cpp port mapping for {Model} (port {Port}).",
+                ollamaModelName, port);
+            return true;
+        }
+
+        return false;
     }
 
     public Uri? GetUpstream(string ollamaModelName)
@@ -136,8 +176,32 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
                 return false;
             }
 
+            _logger.LogInformation(
+                "llama.cpp container for {Model} started on port {Port}. Waiting for it to become ready...",
+                ollamaName, port);
+
+            var ready = await WaitForServerReadyAsync("localhost", port, cancellationToken);
+            if (!ready)
+            {
+                _logger.LogError(
+                    "llama.cpp container for {Model} did not become ready on port {Port} within {Timeout}. Stopping it.",
+                    ollamaName, port, ContainerStartTimeout);
+
+                try
+                {
+                    await RunDockerAsync(["stop", "--time", "10", containerName], CancellationToken.None);
+                    await RunDockerAsync(["rm", "-f", containerName], CancellationToken.None);
+                }
+                catch (Exception cleanupException)
+                {
+                    _logger.LogWarning(cleanupException, "Failed to clean up container {ContainerName}", containerName);
+                }
+
+                return false;
+            }
+
             _modelPorts[ollamaName] = port;
-            _logger.LogInformation("llama.cpp container for {Model} started on port {Port}", ollamaName, port);
+            _logger.LogInformation("llama.cpp container for {Model} is ready on port {Port}.", ollamaName, port);
             return true;
         }
         catch (Exception ex)
@@ -421,6 +485,77 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         }
 
         return port;
+    }
+
+    private static async Task<bool> WaitForServerReadyAsync(
+        string host, int port, CancellationToken cancellationToken)
+    {
+        var deadline = DateTime.UtcNow + ContainerStartTimeout;
+
+        if (!await WaitForTcpPortAsync(host, port, deadline, cancellationToken))
+        {
+            return false;
+        }
+
+        using var handler = new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(3),
+            UseProxy = false
+        };
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                using var response = await httpClient.GetAsync(
+                    $"http://{host}:{port}/health", cancellationToken);
+                if (response.IsSuccessStatusCode)
+                {
+                    return true;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> WaitForTcpPortAsync(
+        string host, int port, DateTime deadline, CancellationToken cancellationToken)
+    {
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                using var client = new TcpClient();
+                await client.ConnectAsync(host, port, cancellationToken);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (SocketException)
+            {
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+        }
+
+        return false;
     }
 
     private static string SanitizeContainerName(string name)

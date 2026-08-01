@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Threading.Channels;
 using Ngino.Protocol;
 
@@ -39,6 +40,7 @@ internal sealed class UpstreamRequest
     private readonly Func<HttpResponseMessage, CancellationToken, Task>? _responseHandler;
     private readonly Func<string, string?>? _pathTransform;
     private readonly Func<byte[], byte[]>? _bodyTransform;
+    private readonly Action? _onConnectionRefused;
     private readonly List<byte[]> _bufferedBody = [];
 
     public UpstreamRequest(
@@ -51,7 +53,8 @@ internal sealed class UpstreamRequest
         Uri? effectiveUpstream = null,
         Func<HttpResponseMessage, CancellationToken, Task>? responseHandler = null,
         Func<string, string?>? pathTransform = null,
-        Func<byte[], byte[]>? bodyTransform = null)
+        Func<byte[], byte[]>? bodyTransform = null,
+        Action? onConnectionRefused = null)
     {
         _httpClient = httpClient;
         _initialMessage = initialMessage;
@@ -61,6 +64,7 @@ internal sealed class UpstreamRequest
         _responseHandler = responseHandler;
         _pathTransform = pathTransform;
         _bodyTransform = bodyTransform;
+        _onConnectionRefused = onConnectionRefused;
         _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
         if (!initialMessage.HasBody)
@@ -143,6 +147,17 @@ internal sealed class UpstreamRequest
         }
         catch (Exception exception)
         {
+            if (IsConnectionRefused(exception))
+            {
+                try
+                {
+                    _onConnectionRefused?.Invoke();
+                }
+                catch
+                {
+                }
+            }
+
             await SendErrorAsync(exception);
         }
         finally
@@ -294,6 +309,25 @@ internal sealed class UpstreamRequest
         catch
         {
         }
+    }
+
+    internal static bool IsConnectionRefused(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException socketException
+                && socketException.SocketErrorCode == SocketError.ConnectionRefused)
+            {
+                return true;
+            }
+
+            if (current.Message.Contains("Connection refused", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static List<HeaderPair> CollectResponseHeaders(HttpResponseMessage response)

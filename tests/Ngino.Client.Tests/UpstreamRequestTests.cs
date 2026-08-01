@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using Ngino.Client;
 using Xunit;
 
@@ -31,5 +32,30 @@ public sealed class UpstreamRequestTests
             () => UpstreamRequest.BuildUpstreamUri(Upstream, pathAndQuery));
 
         Assert.Contains("origin-form path", exception.Message);
+    }
+
+    [Fact]
+    public void IsConnectionRefused_DetectsSocketConnectionRefused()
+    {
+        var socketException = new SocketException((int)SocketError.ConnectionRefused);
+        var exception = new HttpRequestException("Connection refused", socketException);
+
+        Assert.True(UpstreamRequest.IsConnectionRefused(exception));
+    }
+
+    [Fact]
+    public void IsConnectionRefused_DetectsConnectionRefusedByMessage()
+    {
+        var exception = new HttpRequestException("Connection refused (localhost:8081)");
+
+        Assert.True(UpstreamRequest.IsConnectionRefused(exception));
+    }
+
+    [Fact]
+    public void IsConnectionRefused_IgnoresUnrelatedFailures()
+    {
+        var exception = new HttpRequestException("Connection reset by peer");
+
+        Assert.False(UpstreamRequest.IsConnectionRefused(exception));
     }
 }

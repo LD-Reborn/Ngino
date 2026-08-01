@@ -10,6 +10,8 @@ internal static class ReverseProxyEndpoint
 {
     private const string UnauthorizedMessage = "Missing or invalid Ngino token.";
 
+    private const string OllamaVersion = "0.32.5";
+
     private static readonly HashSet<string> HopByHopHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Connection",
@@ -69,6 +71,12 @@ internal static class ReverseProxyEndpoint
         if (pathTokenRemoved && HttpMethods.IsGet(context.Request.Method) && IsRootPath(proxyPath))
         {
             await WriteRootStatusAsync(context, hub);
+            return;
+        }
+
+        if (IsVersionRequest(context.Request, proxyPath))
+        {
+            await WriteVersionResponseAsync(context);
             return;
         }
 
@@ -316,6 +324,15 @@ internal static class ReverseProxyEndpoint
     private static bool IsTagsRequest(HttpRequest request, PathString proxyPath) =>
         HttpMethods.IsGet(request.Method)
         && string.Equals(proxyPath.Value, "/api/tags", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsVersionRequest(HttpRequest request, PathString proxyPath) =>
+        HttpMethods.IsGet(request.Method)
+        && string.Equals(proxyPath.Value, "/api/version", StringComparison.OrdinalIgnoreCase);
+
+    private static Task WriteVersionResponseAsync(HttpContext context) =>
+        context.Response.WriteAsJsonAsync(
+            new { version = OllamaVersion },
+            context.RequestAborted);
 
     private static async Task HandleTagsAsync(
         HttpContext context,
