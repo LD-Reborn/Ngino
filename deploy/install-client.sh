@@ -20,6 +20,9 @@ USE_LLAMA_CPP_VIA_DOCKER=false
 USE_OLLAMA_MODELS_PATH=""
 LLAMA_CPP_DOCKER_IMAGE=""
 LLAMA_CPP_BASE_PORT=""
+LLAMA_CPP_PARALLEL=""
+LLAMA_CPP_FALLBACK_COOLDOWN=""
+LOG_DIR=""
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -57,13 +60,19 @@ Optional:
                        llama.cpp Docker image; defaults to auto-detected (rocm/cuda/cpu)
   --llama-cpp-base-port <num>
                        Base port for llama.cpp containers; defaults to 8081
+  --llama-cpp-parallel <num>
+                       llama.cpp parallel slots per container; if unset, llama.cpp's own default is used
+  --llama-cpp-fallback-cooldown <sec>
+                       Seconds before llama.cpp is retried after a failed container start; defaults to 180
+  --log-dir <dir>      Directory for log files; defaults to <install-dir>/Logs
   -h, --help           Show this help message
 
 Examples:
   $0 --server http://gpu-server:5050 --token "my-secret"
   $0 --server http://gpu-server:5050 --token "my-secret" --no-ollama
   $0 --server http://gpu-server:5050 --token "my-secret" \\
-     --use-llama-cpp-via-docker --use-ollama-models-path /usr/share/ollama/.ollama/models
+     --use-llama-cpp-via-docker --use-ollama-models-path /usr/share/ollama/.ollama/models \\
+     --llama-cpp-parallel 128
 EOF
     exit 0
 }
@@ -82,6 +91,9 @@ while [[ $# -gt 0 ]]; do
         --use-ollama-models-path)   USE_OLLAMA_MODELS_PATH="$2"; shift 2 ;;
         --llama-cpp-docker-image)   LLAMA_CPP_DOCKER_IMAGE="$2"; shift 2 ;;
         --llama-cpp-base-port)      LLAMA_CPP_BASE_PORT="$2"; shift 2 ;;
+        --llama-cpp-parallel)       LLAMA_CPP_PARALLEL="$2"; shift 2 ;;
+        --llama-cpp-fallback-cooldown) LLAMA_CPP_FALLBACK_COOLDOWN="$2"; shift 2 ;;
+        --log-dir)                  LOG_DIR="$2"; shift 2 ;;
         -h|--help)                  usage ;;
         *)                          die "Unknown option: $1" ;;
     esac
@@ -311,6 +323,15 @@ mkdir -p "$ENV_DIR"
         if [[ -n "$LLAMA_CPP_BASE_PORT" ]]; then
             printf 'NGINO_LLAMA_CPP_BASE_PORT=%s\n' "$LLAMA_CPP_BASE_PORT"
         fi
+        if [[ -n "$LLAMA_CPP_PARALLEL" ]]; then
+            printf 'NGINO_LLAMA_CPP_PARALLEL=%s\n' "$LLAMA_CPP_PARALLEL"
+        fi
+        if [[ -n "$LLAMA_CPP_FALLBACK_COOLDOWN" ]]; then
+            printf 'NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS=%s\n' "$LLAMA_CPP_FALLBACK_COOLDOWN"
+        fi
+    fi
+    if [[ -n "$LOG_DIR" ]]; then
+        printf 'NGINO_LOG_DIR=%s\n' "$LOG_DIR"
     fi
 } > "$ENV_DIR/env"
 chmod 600 "$ENV_DIR/env"

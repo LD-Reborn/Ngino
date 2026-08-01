@@ -22,7 +22,14 @@ try
         Console.WriteLine($"  ollama models path: {options.UseOllamaModelsPath ?? "(not set)"}");
         Console.WriteLine($"  llama.cpp docker image: {options.LlamaCppDockerImage ?? "(auto)"}");
         Console.WriteLine($"  llama.cpp base port: {options.LlamaCppBasePort}");
+        Console.WriteLine(
+            options.LlamaCppParallel.HasValue
+                ? $"  llama.cpp parallel slots: {options.LlamaCppParallel.Value}"
+                : "  llama.cpp parallel slots: (llama.cpp default)");
     }
+
+    var logDirectory = options.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");
+    Console.WriteLine($"  log directory: {logDirectory}");
 
     // Args are parsed by ClientOptions; keep them away from the host configuration.
     var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
@@ -32,6 +39,7 @@ try
     builder.Services.AddWindowsService(service => service.ServiceName = "NginoClient");
     // The EventLog provider defaults to Warning; connection state is worth seeing there.
     builder.Logging.AddFilter<Microsoft.Extensions.Logging.EventLog.EventLogLoggerProvider>("Ngino.Client", LogLevel.Information);
+    builder.Logging.AddProvider(new FileLoggerProvider(logDirectory));
 
     await builder.Build().RunAsync();
     return 0;

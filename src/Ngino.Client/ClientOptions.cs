@@ -28,6 +28,12 @@ internal sealed class ClientOptions
 
     public int LlamaCppBasePort { get; init; } = 8081;
 
+    public int? LlamaCppParallel { get; init; }
+
+    public TimeSpan LlamaCppFallbackCooldown { get; init; } = TimeSpan.FromMinutes(3);
+
+    public string? LogDirectory { get; init; }
+
     public Uri TunnelUri
     {
         get
@@ -68,7 +74,10 @@ internal sealed class ClientOptions
             UseLlamaCppViaDocker = ReadBool(values, false, "use-llama-cpp-via-docker", "NGINO_USE_LLAMA_CPP_VIA_DOCKER"),
             UseOllamaModelsPath = NormalizeDirectoryPath(Read(values, "use-ollama-models-path", "NGINO_USE_OLLAMA_MODELS_PATH")),
             LlamaCppDockerImage = Read(values, "llama-cpp-docker-image", "NGINO_LLAMA_CPP_DOCKER_IMAGE"),
-            LlamaCppBasePort = ReadInt(values, 8081, "llama-cpp-base-port", "NGINO_LLAMA_CPP_BASE_PORT")
+            LlamaCppBasePort = ReadInt(values, 8081, "llama-cpp-base-port", "NGINO_LLAMA_CPP_BASE_PORT"),
+            LlamaCppParallel = ReadOptionalInt(values, "llama-cpp-parallel", "NGINO_LLAMA_CPP_PARALLEL"),
+            LlamaCppFallbackCooldown = TimeSpan.FromSeconds(ReadInt(values, 180, "llama-cpp-fallback-cooldown", "NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS")),
+            LogDirectory = NormalizeDirectoryPath(Read(values, "log-dir", "NGINO_LOG_DIR"))
         };
     }
 
@@ -87,6 +96,10 @@ internal sealed class ClientOptions
           --use-ollama-models-path <dir> Path to Ollama models directory (manifests/blobs), required with --use-llama-cpp-via-docker
           --llama-cpp-docker-image <img> llama.cpp Docker image; defaults to auto-detected (rocm/cuda/cpu)
           --llama-cpp-base-port <num>    Base port for llama.cpp containers; defaults to 8081
+          --llama-cpp-parallel <num>     llama.cpp parallel slots per container; if unset, llama.cpp's own default is used
+          --llama-cpp-fallback-cooldown <sec>
+                                         Seconds before llama.cpp is retried after a failed container start; defaults to 180
+          --log-dir <dir>                Directory for log files; defaults to <app dir>/Logs
         """;
 
     private static Dictionary<string, string> ParseArgs(string[] args)
@@ -158,6 +171,12 @@ internal sealed class ClientOptions
     {
         var value = Read(values, keys);
         return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+    }
+
+    private static int? ReadOptionalInt(Dictionary<string, string> values, params string[] keys)
+    {
+        var value = Read(values, keys);
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : null;
     }
 
     private static bool ReadBool(Dictionary<string, string> values, bool fallback, params string[] keys)
