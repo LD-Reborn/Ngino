@@ -269,6 +269,11 @@ app.UseStaticFiles();
 
 app.MapAdminEndpoints(settings);
 
+app.MapGet("/favicon.ico", () =>
+    Results.File(
+        Path.Combine(app.Environment.WebRootPath, "favicon.ico"),
+        "image/x-icon"));
+
 app.MapGet("/", () => Results.Redirect("/admin"));
 
 app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSettings serverSettings, EmbeddingCache embeddingCache, ManagementStore managementStore) =>
