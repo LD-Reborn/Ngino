@@ -133,11 +133,11 @@ sudo bash deploy/install-client.sh --server http://your-server:5050 --token "cha
 ```
 or using ollama models with llama.cpp backend using ROCm:
 ```bash
-sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-rocm   --llama-cpp-base-port 8081
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-rocm   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
 ```
 or using ollama models with llama.cpp backend using CUDA:
 ```bash
-sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-cuda   --llama-cpp-base-port 8081
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-cuda   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
 ```
 
 Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
@@ -150,6 +150,15 @@ llama.cpp via Docker options (replaces Ollama for inferencing):
 | `--use-ollama-models-path <dir>` | Path to Ollama models directory (`manifests/blobs`); required with the flag above |
 | `--llama-cpp-docker-image <img>` | Docker image; defaults to auto-detected (rocm/cuda/cpu) |
 | `--llama-cpp-base-port <num>` | Base port for containers; defaults to `8081` |
+| `--llama-cpp-parallel <num>` | llama.cpp parallel slots per container; if unset, llama.cpp's own default is used (which is `1`) |
+| `--llama-cpp-fallback-cooldown <sec>` | Seconds before llama.cpp is retried after a failed container start; defaults to `180` |
+| `--log-dir <dir>` | Directory for log files; defaults to `<app dir>/Logs` |
+
+### llama.cpp fallback to Ollama
+
+Models are served via llama.cpp Docker containers. If a container cannot be started for a model (for example, the model's GGUF blob is incompatible with the llama.cpp build), the client falls back to the Ollama upstream for that model. Transient start failures are remembered for `--llama-cpp-fallback-cooldown` seconds (default 3 minutes) and then retried; a container that starts but exits before becoming ready marks the model as falling back until it is unloaded. `load`/`unload` model commands and on-demand request routing are all covered; a failed container start is detected quickly by watching the container state, and the container log tail is written to the client log to aid debugging.
+
+Note: some hybrid SSM/attention models (e.g. `qwen3.5-coder-next`) are converted by Ollama into a GGUF tensor layout that stock llama.cpp cannot load (`missing tensor 'blk.0.ssm_dt.bias'` and similar). Such models are served via the Ollama fallback above. If you want them to run on llama.cpp instead, use a Hugging Face-converted GGUF (e.g. `unsloth/Qwen3-Coder-Next-GGUF`) rather than the Ollama blob.
 
 The script ensures .NET 10 and Ollama are installed, builds the client self-contained, installs it to `/opt/Ngino-client`, and creates a systemd service (`Ngino-client`). Logs: `journalctl -u Ngino-client -f`.
 

@@ -16,24 +16,35 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
     private const string NginoContainerLabel = "ngino-llamacpp";
     private static readonly TimeSpan DockerTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ContainerStartTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultFallbackCooldown = TimeSpan.FromMinutes(3);
 
     private readonly string _blobsPath;
     private readonly string _manifestsPath;
     private readonly string _dockerImage;
     private readonly int _basePort;
+    private readonly int? _parallel;
+    private readonly TimeSpan _fallbackCooldown;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, int> _modelPorts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<int, byte> _reservedPorts = new();
+    private readonly ConcurrentDictionary<string, DateTime> _fallbackModels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _modelStartLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _portAllocationLock = new();
 
     public LlamaCppManager(
         string ollamaModelsPath,
         string? dockerImage,
         int? basePort,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        TimeSpan fallbackCooldown = default,
+        int? parallel = null)
     {
         _manifestsPath = Path.Combine(ollamaModelsPath, "manifests");
         _blobsPath = Path.Combine(ollamaModelsPath, "blobs");
         _dockerImage = dockerImage ?? GetDefaultDockerImage();
         _basePort = basePort ?? DefaultBasePort;
+        _fallbackCooldown = fallbackCooldown > TimeSpan.Zero ? fallbackCooldown : DefaultFallbackCooldown;
+        _parallel = parallel is > 0 ? parallel : null;
         _logger = logger ?? NullLogger<LlamaCppManager>.Instance;
     }
 
@@ -78,6 +89,45 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         return _modelPorts.ContainsKey(ollamaModelName);
     }
 
+    public void MarkModelAsFallback(string ollamaModelName)
+    {
+        _fallbackModels[ollamaModelName] = DateTime.UtcNow.Add(_fallbackCooldown);
+        _logger.LogWarning(
+            "Model {Model} will fall back to the Ollama upstream for {Cooldown} before llama.cpp is retried.",
+            ollamaModelName, _fallbackCooldown);
+    }
+
+    public void MarkModelAsPermanentFallback(string ollamaModelName)
+    {
+        _fallbackModels[ollamaModelName] = DateTime.MaxValue;
+        _logger.LogError(
+            "Model {Model} exited its llama.cpp container before becoming ready. It will fall back to the Ollama upstream until it is unloaded.",
+            ollamaModelName);
+    }
+
+    public bool IsModelOnFallback(string ollamaModelName)
+    {
+        if (_fallbackModels.TryGetValue(ollamaModelName, out var expiresAt))
+        {
+            if (expiresAt > DateTime.UtcNow)
+            {
+                return true;
+            }
+
+            _fallbackModels.TryRemove(ollamaModelName, out _);
+        }
+
+        return false;
+    }
+
+    public void ClearModelFallback(string ollamaModelName)
+    {
+        if (_fallbackModels.TryRemove(ollamaModelName, out _))
+        {
+            _logger.LogInformation("Cleared llama.cpp fallback marker for model {Model}.", ollamaModelName);
+        }
+    }
+
     public async Task<bool> IsContainerRunningAsync(string ollamaModelName)
     {
         if (!_modelPorts.ContainsKey(ollamaModelName))
@@ -96,7 +146,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             _logger.LogWarning(
                 "llama.cpp container {ContainerName} is no longer running. Invalidating cached port for {Model}.",
                 containerName, ollamaModelName);
-            _modelPorts.TryRemove(ollamaModelName, out _);
+            RemoveModelPort(ollamaModelName);
         }
 
         return running;
@@ -104,11 +154,11 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
 
     public bool RemoveModelMapping(string ollamaModelName)
     {
-        if (_modelPorts.TryRemove(ollamaModelName, out var port))
+        if (RemoveModelPort(ollamaModelName))
         {
             _logger.LogWarning(
-                "Removed stale llama.cpp port mapping for {Model} (port {Port}).",
-                ollamaModelName, port);
+                "Removed stale llama.cpp port mapping for {Model}.",
+                ollamaModelName);
             return true;
         }
 
@@ -134,45 +184,75 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             return false;
         }
 
+        var startLock = _modelStartLocks.GetOrAdd(ollamaName, static _ => new SemaphoreSlim(1, 1));
+        await startLock.WaitAsync(cancellationToken);
+        try
+        {
+            return await StartModelContainerCoreAsync(model, cancellationToken);
+        }
+        finally
+        {
+            startLock.Release();
+        }
+    }
+
+    private async Task<bool> StartModelContainerCoreAsync(LlamaCppModel model, CancellationToken cancellationToken)
+    {
+        var ollamaName = model.OllamaName;
+        if (string.IsNullOrWhiteSpace(ollamaName))
+        {
+            return false;
+        }
+
         if (_modelPorts.ContainsKey(ollamaName))
         {
             _logger.LogInformation("Model {Model} already has a running container", ollamaName);
             return true;
         }
 
+        if (IsModelOnFallback(ollamaName))
+        {
+            _logger.LogInformation(
+                "Model {Model} previously failed to load via llama.cpp. Skipping container start.",
+                ollamaName);
+            return false;
+        }
+
         if (!File.Exists(model.BlobPath))
         {
             _logger.LogError("Model blob not found: {BlobPath}", model.BlobPath);
+            MarkModelAsFallback(ollamaName);
             return false;
         }
 
         var port = FindAvailablePort();
         var containerName = SanitizeContainerName($"ngino-llamacpp-{ollamaName}");
 
-        var existingPort = await FindExistingContainerPortAsync(containerName);
-        if (existingPort.HasValue)
-        {
-            _logger.LogInformation(
-                "Reusing existing container for {Model} on port {Port}", ollamaName, existingPort.Value);
-            _modelPorts[ollamaName] = existingPort.Value;
-            return true;
-        }
-
-        await RunDockerAsync(["rm", "-f", containerName], CancellationToken.None);
-
-        var args = BuildDockerRunArgs(containerName, model, port);
-        _logger.LogInformation(
-            "Starting llama.cpp container for {Model} on port {Port}: docker {Args}",
-            ollamaName, port, string.Join(" ", args));
-
         try
         {
+            var existingPort = await FindExistingContainerPortAsync(containerName);
+            if (existingPort.HasValue)
+            {
+                _logger.LogInformation(
+                    "Reusing existing container for {Model} on port {Port}", ollamaName, existingPort.Value);
+                _modelPorts[ollamaName] = existingPort.Value;
+                return true;
+            }
+
+            await RunDockerAsync(["rm", "-f", containerName], CancellationToken.None);
+
+            var args = BuildDockerRunArgs(containerName, model, port);
+            _logger.LogInformation(
+                "Starting llama.cpp container for {Model} on port {Port}: docker {Args}",
+                ollamaName, port, string.Join(" ", args));
+
             var (exitCode, output) = await RunDockerWithOutputAsync(args, cancellationToken);
             if (exitCode != 0)
             {
                 _logger.LogError(
                     "Failed to start llama.cpp container for {Model}, exit code: {ExitCode}, output: {Output}",
                     ollamaName, exitCode, output);
+                MarkModelAsFallback(ollamaName);
                 return false;
             }
 
@@ -180,12 +260,21 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
                 "llama.cpp container for {Model} started on port {Port}. Waiting for it to become ready...",
                 ollamaName, port);
 
-            var ready = await WaitForServerReadyAsync("localhost", port, cancellationToken);
-            if (!ready)
+            var result = await WaitForServerReadyAsync("localhost", port, containerName, cancellationToken);
+            if (result != ContainerStartResult.Ready)
             {
+                if (result == ContainerStartResult.ContainerExited)
+                {
+                    MarkModelAsPermanentFallback(ollamaName);
+                }
+                else
+                {
+                    MarkModelAsFallback(ollamaName);
+                }
+
                 _logger.LogError(
-                    "llama.cpp container for {Model} did not become ready on port {Port} within {Timeout}. Stopping it.",
-                    ollamaName, port, ContainerStartTimeout);
+                    "llama.cpp container for {Model} did not become ready on port {Port} within {Timeout} ({Result}). Stopping it.",
+                    ollamaName, port, ContainerStartTimeout, result);
 
                 try
                 {
@@ -207,13 +296,18 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to start llama.cpp container for {Model}", ollamaName);
+            MarkModelAsFallback(ollamaName);
             return false;
+        }
+        finally
+        {
+            ReleaseReservedPort(port);
         }
     }
 
     public async Task<bool> StopModelContainerAsync(string ollamaModelName, CancellationToken cancellationToken)
     {
-        if (!_modelPorts.TryRemove(ollamaModelName, out _))
+        if (!RemoveModelPort(ollamaModelName))
         {
             _logger.LogWarning("No running container found for model {Model}", ollamaModelName);
             return false;
@@ -227,6 +321,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         {
             await RunDockerAsync(["stop", "--time", "10", containerName], cancellationToken);
             await RunDockerAsync(["rm", "-f", containerName], cancellationToken);
+            ClearModelFallback(ollamaModelName);
             return true;
         }
         catch (Exception ex)
@@ -262,6 +357,8 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         }
 
         _modelPorts.Clear();
+        _reservedPorts.Clear();
+        _fallbackModels.Clear();
     }
 
     public async Task<bool> TestDockerAsync()
@@ -389,7 +486,6 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         {
             "run",
             "-d",
-            "--rm",
             "--label", $"{NginoContainerLabel}=true",
             "--name", containerName,
             "-p", $"{port}:{port}",
@@ -413,9 +509,12 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         args.Add("-m");
         args.Add($"/models/blobs/{blobFile}");
         args.Add("-ngl");
-        args.Add("999");
-        args.Add("--parallel");
-        args.Add("4");
+        args.Add("auto");
+        if (_parallel.HasValue)
+        {
+            args.Add("--parallel");
+            args.Add(_parallel.Value.ToString());
+        }
         args.Add("--host");
         args.Add("0.0.0.0");
         args.Add("--port");
@@ -476,25 +575,51 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
 
     private int FindAvailablePort()
     {
-        var usedPorts = new HashSet<int>(_modelPorts.Values);
-        var port = _basePort;
-
-        while (usedPorts.Contains(port))
+        lock (_portAllocationLock)
         {
-            port++;
-        }
+            var usedPorts = new HashSet<int>(_modelPorts.Values);
+            foreach (var reservedPort in _reservedPorts.Keys)
+            {
+                usedPorts.Add(reservedPort);
+            }
 
-        return port;
+            var port = _basePort;
+
+            while (usedPorts.Contains(port))
+            {
+                port++;
+            }
+
+            _reservedPorts[port] = 0;
+            return port;
+        }
     }
 
-    private static async Task<bool> WaitForServerReadyAsync(
-        string host, int port, CancellationToken cancellationToken)
+    private void ReleaseReservedPort(int port)
+    {
+        _reservedPorts.TryRemove(port, out _);
+    }
+
+    private bool RemoveModelPort(string ollamaModelName)
+    {
+        if (_modelPorts.TryRemove(ollamaModelName, out var port))
+        {
+            ReleaseReservedPort(port);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<ContainerStartResult> WaitForServerReadyAsync(
+        string host, int port, string containerName, CancellationToken cancellationToken)
     {
         var deadline = DateTime.UtcNow + ContainerStartTimeout;
 
-        if (!await WaitForTcpPortAsync(host, port, deadline, cancellationToken))
+        var tcpResult = await WaitForTcpPortAsync(host, port, containerName, deadline, cancellationToken);
+        if (tcpResult != ContainerStartResult.Ready)
         {
-            return false;
+            return tcpResult;
         }
 
         using var handler = new SocketsHttpHandler
@@ -508,41 +633,57 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (!await IsDockerContainerRunningAsync(containerName))
+            {
+                await LogContainerOutputAsync(containerName);
+                return ContainerStartResult.ContainerExited;
+            }
+
             try
             {
                 using var response = await httpClient.GetAsync(
                     $"http://{host}:{port}/health", cancellationToken);
                 if (response.IsSuccessStatusCode)
                 {
-                    return true;
+                    return ContainerStartResult.Ready;
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
             }
-            catch (Exception)
+            catch (HttpRequestException ex)
             {
-                return false;
+                _logger.LogDebug(ex, "Health probe of llama.cpp container {ContainerName} failed; retrying.", containerName);
+            }
+            catch (IOException ex)
+            {
+                _logger.LogDebug(ex, "Health probe of llama.cpp container {ContainerName} failed; retrying.", containerName);
             }
 
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         }
 
-        return false;
+        return ContainerStartResult.TimedOut;
     }
 
-    private static async Task<bool> WaitForTcpPortAsync(
-        string host, int port, DateTime deadline, CancellationToken cancellationToken)
+    private async Task<ContainerStartResult> WaitForTcpPortAsync(
+        string host, int port, string containerName, DateTime deadline, CancellationToken cancellationToken)
     {
         while (DateTime.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (!await IsDockerContainerRunningAsync(containerName))
+            {
+                await LogContainerOutputAsync(containerName);
+                return ContainerStartResult.ContainerExited;
+            }
+
             try
             {
                 using var client = new TcpClient();
                 await client.ConnectAsync(host, port, cancellationToken);
-                return true;
+                return ContainerStartResult.Ready;
             }
             catch (OperationCanceledException)
             {
@@ -555,7 +696,49 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
         }
 
-        return false;
+        return ContainerStartResult.TimedOut;
+    }
+
+    private async Task<bool> IsDockerContainerRunningAsync(string containerName)
+    {
+        try
+        {
+            var (exitCode, output) = await RunDockerWithOutputAsync(
+                ["inspect", "-f", "{{.State.Running}}", containerName],
+                CancellationToken.None);
+            return exitCode == 0 && string.Equals(output.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private async Task LogContainerOutputAsync(string containerName)
+    {
+        try
+        {
+            var (_, output) = await RunDockerWithOutputAsync(
+                ["logs", "--tail", "100", containerName],
+                CancellationToken.None);
+
+            if (!string.IsNullOrWhiteSpace(output))
+            {
+                _logger.LogError(
+                    "llama.cpp container {ContainerName} exited before becoming ready. Last output:\n{Output}",
+                    containerName, output);
+            }
+            else
+            {
+                _logger.LogError(
+                    "llama.cpp container {ContainerName} exited before becoming ready, but produced no output.",
+                    containerName);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read logs of container {ContainerName}", containerName);
+        }
     }
 
     private static string SanitizeContainerName(string name)
@@ -655,6 +838,13 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
 
     [GeneratedRegex(@"[^a-zA-Z0-9_.-]")]
     private static partial Regex InvalidContainerNameChars();
+
+    private enum ContainerStartResult
+    {
+        Ready,
+        ContainerExited,
+        TimedOut
+    }
 }
 
 internal sealed record LlamaCppModel
