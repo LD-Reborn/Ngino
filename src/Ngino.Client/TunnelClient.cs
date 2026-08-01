@@ -482,7 +482,7 @@ internal sealed class TunnelClient
                         Type = TunnelMessageTypes.ModelCommandResult,
                         RequestId = message.RequestId,
                         StatusCode = 500,
-                        Error = $"Failed to start llama.cpp container for model '{modelName}'."
+                        Error = $"Unable to load model '{modelName}'."
                     };
                 }
 
@@ -694,28 +694,44 @@ internal sealed class TunnelClient
             if (modelName is not null)
             {
                 effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
+                if (effectiveUpstream is not null)
+                {
+                    var running = await _llamaCppManager.IsContainerRunningAsync(modelName);
+                    if (!running)
+                    {
+                        _logger.LogWarning(
+                            "Cached llama.cpp container for model '{Model}' is not running anymore. Starting a fresh one on demand...",
+                            modelName);
+                        effectiveUpstream = null;
+                    }
+                }
+
                 if (effectiveUpstream is null)
                 {
-                    _logger.LogInformation(
-                        "Request for model '{Model}' but no llama.cpp container is running. Starting one on demand...",
-                        modelName);
-
                     var model = _llamaCppManager.DiscoverModelsWithBlob()
                         .FirstOrDefault(m => string.Equals(m.OllamaName, modelName, StringComparison.OrdinalIgnoreCase));
 
                     if (model is not null)
                     {
+                        _logger.LogInformation(
+                            "Request for model '{Model}' but no llama.cpp container is running. Starting one on demand...",
+                            modelName);
+
                         var started = await _llamaCppManager.StartModelContainerAsync(model, cancellationToken);
                         if (started)
                         {
                             effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
                         }
+                        else
+                        {
+                            await SendModelLoadErrorAsync(socket, message, modelName, cancellationToken);
+                            return;
+                        }
                     }
-
-                    if (effectiveUpstream is null)
+                    else
                     {
                         _logger.LogWarning(
-                            "Failed to start llama.cpp container for model '{Model}'. Falling back to default upstream.",
+                            "Model '{Model}' was not found in the Ollama models path. Falling back to default upstream.",
                             modelName);
                     }
                 }
@@ -766,7 +782,14 @@ internal sealed class TunnelClient
             effectiveUpstream: effectiveUpstream,
             responseHandler: responseHandler,
             pathTransform: pathTransform,
-            bodyTransform: bodyTransform);
+            bodyTransform: bodyTransform,
+            onConnectionRefused: () =>
+            {
+                if (_llamaCppManager is not null && modelName is not null)
+                {
+                    _llamaCppManager.RemoveModelMapping(modelName);
+                }
+            });
 
         if (!_activeRequests.TryAdd(message.RequestId, request))
         {
@@ -805,6 +828,50 @@ internal sealed class TunnelClient
         {
             _sendLock.Release();
         }
+    }
+
+    private async Task SendModelLoadErrorAsync(
+        ClientWebSocket socket, TunnelMessage message, string modelName, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Unable to load model '{Model}' via llama.cpp. Notifying caller.", modelName);
+
+        var body = JsonSerializer.SerializeToUtf8Bytes(
+            new { error = $"Unable to load model '{modelName}'" },
+            JsonOptions);
+
+        _pendingRequestBodies.TryRemove(message.RequestId, out _);
+
+        await SendAsync(
+            socket,
+            new TunnelMessage
+            {
+                Type = TunnelMessageTypes.HttpResponseHeaders,
+                RequestId = message.RequestId,
+                StatusCode = 500,
+                ReasonPhrase = "Internal Server Error",
+                Headers = [new HeaderPair("Content-Type", "application/json")]
+            },
+            CancellationToken.None);
+
+        await SendAsync(
+            socket,
+            new TunnelMessage
+            {
+                Type = TunnelMessageTypes.HttpResponseBody,
+                RequestId = message.RequestId,
+                Body = body
+            },
+            CancellationToken.None);
+
+        await SendAsync(
+            socket,
+            new TunnelMessage
+            {
+                Type = TunnelMessageTypes.HttpResponseComplete,
+                RequestId = message.RequestId
+            },
+            CancellationToken.None);
     }
 
     private void CancelAllActiveRequests()
