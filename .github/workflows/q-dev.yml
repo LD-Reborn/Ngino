@@ -1,0 +1,74 @@
+# ASP.NET
+# Build and test ASP.NET projects.
+# Add steps that publish symbols, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/apps/aspnet/build-aspnet-4
+
+trigger:
+  branches:
+    include:
+      - '*release-dev*'
+
+pool:
+  name: Default
+  demands:
+    - agent.name -equals AgentDev
+
+variables:
+  solution: '**/*.sln'
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Release'
+  #E2E_BROWSER: 'edge'
+  #E2E_HEADLESS: 'true'
+
+steps:
+
+- task: DotNetCoreCLI@2
+  displayName: 'dotnet publish'
+  inputs:
+    command: 'publish'
+    publishWebProjects: false
+    projects: '$(Build.SourcesDirectory)\src\Ngino.Server\Ngino.Server.csproj'
+    arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)\output'
+    zipAfterPublish: false
+    modifyOutputPath: false
+
+- task: PowerShell@2
+  displayName: 'enable app offline'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $siteRoot = 'C:\inetpub\wwwroot\ngino.center-q-dev.intern.gelsenkirchen.de'
+      $offlineFile = Join-Path $siteRoot 'app_offline.htm'
+
+      Set-Content -Path $offlineFile -Value '<html><body><h1>Maintenance</h1></body></html>' -Encoding UTF8
+      Start-Sleep -Seconds 5
+
+# - task: DotNetCoreCLI@2
+#   displayName: 'Run Tests'
+#   inputs:
+#     command: 'test'
+#     projects: '$(Build.SourcesDirectory)\tests\E2ETests\E2ETests.csproj'
+#     arguments: '--configuration Release'
+#     publishTestResults: true
+#     testRunTitle: 'Run Tests'
+
+- task: CopyFiles@2
+  displayName: 'copy to destination'
+  inputs:
+    SourceFolder: '$(Build.ArtifactStagingDirectory)\output'
+    Contents: '**'
+    TargetFolder: 'C:\inetpub\wwwroot\ngino.center-q-dev.intern.gelsenkirchen.de\'
+    CleanTargetFolder: true
+    OverWrite: true
+
+- task: PowerShell@2
+  displayName: 'disable app offline'
+  condition: always()
+  inputs:
+    targetType: 'inline'
+    script: |
+      $offlineFile = 'C:\inetpub\wwwroot\ngino.center-q-dev.intern.gelsenkirchen.de\app_offline.htm'
+
+      if (Test-Path $offlineFile) {
+        Remove-Item -Path $offlineFile -Force
+      }
