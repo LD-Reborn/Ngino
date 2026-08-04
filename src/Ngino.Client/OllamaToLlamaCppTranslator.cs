@@ -44,7 +44,7 @@ internal sealed class OllamaToLlamaCppTranslator
             {
                 "/api/generate" => TranslateGenerateBody(body),
                 "/api/chat" => TranslateChatBody(body),
-                "/api/embed" or "/api/embeddings" => TranslateEmbedBody(body),
+                "/api/embed" or "/api/embeddings" => TranslateEmbedBody(path, body),
                 _ => body
             };
         }
@@ -118,7 +118,7 @@ internal sealed class OllamaToLlamaCppTranslator
         return true;
     }
 
-    private byte[] TranslateEmbedBody(byte[] body)
+    private byte[] TranslateEmbedBody(string path, byte[] body)
     {
         using var doc = JsonDocument.Parse(body);
         var root = doc.RootElement;
@@ -130,6 +130,8 @@ internal sealed class OllamaToLlamaCppTranslator
 
         if (root.TryGetProperty("input", out var input))
             result["input"] = input.Deserialize<object>(JsonOptions);
+        else if (path == "/api/embeddings" && root.TryGetProperty("prompt", out var prompt))
+            result["input"] = prompt.Deserialize<object>(JsonOptions);
 
         return JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
     }
@@ -182,10 +184,81 @@ internal sealed class OllamaToLlamaCppTranslator
                 await TranslateNonStreaming(path, httpResponse, sendAsync, requestId, cancellationToken);
             }
         }
+        else if (path is "/api/embed" or "/api/embeddings")
+        {
+            await TranslateEmbeddingResponse(path, httpResponse, sendAsync, requestId, cancellationToken);
+        }
         else
         {
             await ForwardRawResponse(httpResponse, sendAsync, requestId, cancellationToken);
         }
+    }
+
+    private async Task TranslateEmbeddingResponse(
+        string path,
+        HttpResponseMessage httpResponse,
+        Func<TunnelMessage, CancellationToken, Task> sendAsync,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await sendAsync(new TunnelMessage
+        {
+            Type = TunnelMessageTypes.HttpResponseHeaders,
+            RequestId = requestId,
+            StatusCode = (int)httpResponse.StatusCode,
+            ReasonPhrase = httpResponse.ReasonPhrase
+        }, cancellationToken);
+
+        var body = await httpResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+        byte[] translatedBody;
+
+        try
+        {
+            translatedBody = TranslateEmbeddingResponseBody(path, body);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to translate embedding response for {Path}", path);
+            translatedBody = body;
+        }
+
+        await sendAsync(new TunnelMessage
+        {
+            Type = TunnelMessageTypes.HttpResponseBody,
+            RequestId = requestId,
+            Body = translatedBody
+        }, cancellationToken);
+
+        await sendAsync(new TunnelMessage
+        {
+            Type = TunnelMessageTypes.HttpResponseComplete,
+            RequestId = requestId
+        }, cancellationToken);
+    }
+
+    private byte[] TranslateEmbeddingResponseBody(string path, byte[] body)
+    {
+        using var doc = JsonDocument.Parse(body);
+        var root = doc.RootElement;
+        var data = root.GetProperty("data");
+
+        var embeddings = data
+            .EnumerateArray()
+            .Select(item => item.GetProperty("embedding").Deserialize<object>(JsonOptions))
+            .ToList();
+
+        object result = path == "/api/embeddings"
+            ? new Dictionary<string, object?>
+            {
+                ["embedding"] = embeddings.FirstOrDefault() ?? Array.Empty<float>()
+            }
+            : new Dictionary<string, object?>
+            {
+                ["model"] = _modelName,
+                ["embeddings"] = embeddings
+            };
+
+        return JsonSerializer.SerializeToUtf8Bytes(result, JsonOptions);
     }
 
     private async Task ForwardRawResponse(
