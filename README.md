@@ -108,7 +108,6 @@ Client options:
 - `--client-id <name>` or `NGINO_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
 - `--tunnel-path <path>` or `NGINO_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.
 - `--reconnect-delay <seconds>` or `NGINO_RECONNECT_DELAY_SECONDS`: defaults to `5`.
-- `--chunk-size <bytes>` or `NGINO_CHUNK_SIZE`: defaults to `65536`.
 
 ### Setting client options via environment variables
 
