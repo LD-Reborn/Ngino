@@ -304,7 +304,8 @@ app.MapGet(settings.StatusPath, (HttpContext context, TunnelHub hub, ServerSetti
 
 app.Map(settings.TunnelPath, async (HttpContext context, TunnelHub hub, ServerSettings serverSettings, ManagementStore managementStore) =>
 {
-    if (!TokenAuthentication.IsClientAuthorized(context.Request, serverSettings, managementStore, allowQueryToken: true))
+    var clientAuth = TokenAuthentication.AuthorizeClient(context.Request, serverSettings, managementStore, allowQueryToken: true);
+    if (!clientAuth.IsAuthorized)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await context.Response.WriteAsync($"Missing or invalid {ProtocolConstants.TokenHeader}.", context.RequestAborted);
@@ -324,8 +325,13 @@ app.Map(settings.TunnelPath, async (HttpContext context, TunnelHub hub, ServerSe
         clientId = $"anonymous-{Guid.NewGuid():n}";
     }
 
+    var clientKeyId = clientAuth.UserKeyId;
+    var accessProvider = clientKeyId is not null
+        ? new Func<GroupAccess?>(() => managementStore.ResolveClientKeyAccess(clientKeyId))
+        : null;
+
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    await hub.AcceptAsync(clientId, socket, context.RequestAborted);
+    await hub.AcceptAsync(clientId, socket, context.RequestAborted, accessProvider);
 });
 
 app.Map("/clients/{clientId}/{**path}", ReverseProxyEndpoint.HandleClientAsync);

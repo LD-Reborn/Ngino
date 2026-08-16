@@ -17,12 +17,12 @@ const sidebarMeta = document.getElementById("sidebarMeta");
 document.getElementById("refreshButton").addEventListener("click", () => refresh(true));
 window.addEventListener("hashchange", () => renderRoute());
 document.addEventListener("click", (event) => {
-  if (event.target.closest(".help-button") || event.target.closest(".help-popover")) {
+  if (event.target.closest(".help-button") || event.target.closest(".warn-button") || event.target.closest(".help-popover")) {
     return;
   }
 
   document.querySelectorAll(".help-popover").forEach((popover) => popover.remove());
-  document.querySelectorAll(".help-button.active").forEach((button) => button.classList.remove("active"));
+  document.querySelectorAll(".help-button.active, .warn-button.active").forEach((button) => button.classList.remove("active"));
 });
 
 const morphdomOptions = {
@@ -34,6 +34,8 @@ const morphdomOptions = {
 };
 
 function patchContent(html) {
+  document.querySelectorAll(".help-popover").forEach((popover) => popover.remove());
+  document.querySelectorAll(".help-button.active, .warn-button.active").forEach((button) => button.classList.remove("active"));
   const temp = document.createElement("section");
   temp.innerHTML = html;
   morphdom(content, temp, morphdomOptions);
@@ -55,12 +57,12 @@ function renderFieldLabel(forId, label, helpText) {
 }
 
 function toggleHelpPopover(button) {
-  const field = button.closest(".field");
-  if (!field) {
+  const host = button.closest(".field") || button.closest("td") || button.closest("th");
+  if (!host) {
     return;
   }
 
-  const existingPopover = field.querySelector(".help-popover");
+  const existingPopover = document.querySelector(".help-popover[data-owner-id='" + (button.dataset.ownerId || "") + "']") || host.querySelector(".help-popover");
   if (existingPopover) {
     existingPopover.remove();
     button.classList.remove("active");
@@ -68,13 +70,38 @@ function toggleHelpPopover(button) {
   }
 
   document.querySelectorAll(".help-popover").forEach((popover) => popover.remove());
-  document.querySelectorAll(".help-button.active").forEach((activeButton) => activeButton.classList.remove("active"));
+  document.querySelectorAll(".help-button.active, .warn-button.active").forEach((activeButton) => activeButton.classList.remove("active"));
 
   const popover = document.createElement("div");
-  popover.className = "help-popover";
+  const inTable = host.tagName === "TD" || host.tagName === "TH";
+  popover.className = "help-popover" + (inTable ? " in-table" : "");
   popover.textContent = button.dataset.help || "";
-  field.appendChild(popover);
+
+  if (inTable) {
+    popover.dataset.ownerId = button.dataset.ownerId || button.textContent;
+    positionPopover(popover, button);
+    document.body.appendChild(popover);
+  } else {
+    host.appendChild(popover);
+  }
+
   button.classList.add("active");
+}
+
+function positionPopover(popover, anchor) {
+  const rect = anchor.getBoundingClientRect();
+  popover.style.position = "fixed";
+  popover.style.left = `${rect.left}px`;
+  popover.style.top = `${rect.bottom + 6}px`;
+  popover.style.margin = "0";
+
+  const bounds = popover.getBoundingClientRect();
+  if (bounds.bottom > window.innerHeight) {
+    popover.style.top = `${Math.max(4, rect.top - bounds.height - 6)}px`;
+  }
+  if (bounds.right > window.innerWidth) {
+    popover.style.left = `${Math.max(4, rect.right - bounds.width)}px`;
+  }
 }
 
 content.addEventListener("click", async (event) => {
@@ -150,6 +177,40 @@ content.addEventListener("click", async (event) => {
       await refresh();
     }
 
+    if (action === "manage-client-key-groups") {
+      setBusy(button, false);
+      try {
+        const body = await showClientKeyGroupsModal(keyId, button.dataset.keyName);
+        setBusy(button, true);
+        await api(`/client-keys/${encodeURIComponent(keyId)}/groups`, {
+          method: "PUT",
+          body
+        });
+        setNotice("Client key groups updated.");
+        await refresh();
+      } catch {
+        // cancelled
+      }
+      return;
+    }
+
+    if (action === "manage-user-key-groups") {
+      setBusy(button, false);
+      try {
+        const body = await showUserKeyGroupsModal(keyId, button.dataset.keyName);
+        setBusy(button, true);
+        await api(`/user-keys/${encodeURIComponent(keyId)}/groups`, {
+          method: "PUT",
+          body
+        });
+        setNotice("User key groups updated.");
+        await refresh();
+      } catch {
+        // cancelled
+      }
+      return;
+    }
+
     if (action === "copy-key") {
       await navigator.clipboard.writeText(button.dataset.key);
       setNotice("User key copied.");
@@ -178,6 +239,10 @@ content.addEventListener("click", async (event) => {
 
     if (action === "toggle-key-assignment") {
       await toggleUserKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
+    }
+
+    if (action === "toggle-client-key-assignment") {
+      await toggleClientKeyAssignment(groupId, keyId, button.dataset.assigned === "true");
     }
 
     if (action === "delete-billing-rule") {
@@ -773,7 +838,7 @@ function renderUserKeys() {
   pageSubtitle.textContent = "Keys accepted by the proxy token header, bearer auth, query token, and token path.";
 
   patchContent(`
-    ${state.newKey ? newKeyPanel(state.newKey) : ""}
+    ${state.newKey ? newKeyPanel(state.newKey, "New user key") : ""}
     <div class="panel">
       <div class="panel-header">
         <h2>Create user key</h2>
@@ -806,7 +871,7 @@ function renderClientKeys() {
   pageSubtitle.textContent = "Keys accepted by GPU clients to establish tunnel connections.";
 
   patchContent(`
-    ${state.newClientKey ? newKeyPanel(state.newClientKey) : ""}
+    ${state.newClientKey ? newKeyPanel(state.newClientKey, "New client key") : ""}
     <div class="panel">
       <div class="panel-header">
         <h2>Create client key</h2>
@@ -833,10 +898,10 @@ function renderClientKeys() {
   `);
 }
 
-function newKeyPanel(key) {
+function newKeyPanel(key, label = "New user key") {
   return `
     <div class="new-key">
-      <strong>New user key</strong>
+      <strong>${escapeHtml(label)}</strong>
       <code>${escapeHtml(key.key)}</code>
       <div class="actions">
         <button class="button secondary" type="button" data-action="copy-key" data-key="${escapeAttr(key.key)}">Copy</button>
@@ -846,19 +911,44 @@ function newKeyPanel(key) {
 }
 
 function userKeysTable(keys) {
-  const rows = keys.map((key) => `
+  const userKeyGroups = state.summary?.userKeyGroups || [];
+  const groupsByKey = new Map(userKeyGroups.map((info) => [info.userKeyId, info]));
+
+  const rows = keys.map((key) => {
+    const keyGroups = groupsByKey.get(key.id);
+    const hasGroups = keyGroups && keyGroups.groupIds.length > 0;
+    const groupsCell = hasGroups
+      ? `<div class="badge-row">${keyGroups.groupNames.map((name, index) =>
+          `<a class="badge" href="#groups/${encodeURIComponent(keyGroups.groupIds[index])}">${escapeHtml(name)}</a>`
+        ).join("")}</div>`
+      : `<span class="cell-sub">No groups</span>`;
+    const warning = hasGroups
+      ? ""
+      : `<button class="warn-button" type="button" data-action="toggle-help" data-owner-id="user-${escapeAttr(key.id)}"
+          data-help="This user key has no groups yet, so it does not have access to any models. Assign it to a group to grant access."
+          aria-label="No groups">!</button>`;
+
+    return `
     <tr>
       <td>
-        <div class="cell-main">${escapeHtml(key.name)}</div>
+        <div class="cell-main">
+          <span>${escapeHtml(key.name)}</span>
+          ${warning}
+        </div>
         <div class="cell-sub">${escapeHtml(key.keyPrefix)}...</div>
       </td>
       <td>${formatDate(key.createdAtUtc)}</td>
       <td>${key.lastUsedUtc ? formatDate(key.lastUsedUtc) : "Never"}</td>
+      <td>${groupsCell}</td>
       <td>
-        <button class="button danger" data-action="delete-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
+        <div class="actions">
+          <button class="button secondary" data-action="manage-user-key-groups" data-key-id="${escapeAttr(key.id)}" data-key-name="${escapeAttr(key.name)}">Manage groups</button>
+          <button class="button danger" data-action="delete-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
+        </div>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 
   return `
     <table>
@@ -867,6 +957,7 @@ function userKeysTable(keys) {
           <th>Name</th>
           <th>Created</th>
           <th>Last used</th>
+          <th>Groups</th>
           <th></th>
         </tr>
       </thead>
@@ -876,19 +967,44 @@ function userKeysTable(keys) {
 }
 
 function clientKeysTable(keys) {
-  const rows = keys.map((key) => `
+  const clientKeyGroups = state.summary?.clientKeyGroups || [];
+  const groupsByKey = new Map(clientKeyGroups.map((info) => [info.clientKeyId, info]));
+
+  const rows = keys.map((key) => {
+    const keyGroups = groupsByKey.get(key.id);
+    const hasGroups = keyGroups && keyGroups.groupIds.length > 0;
+    const groupsCell = hasGroups
+      ? `<div class="badge-row">${keyGroups.groupNames.map((name, index) =>
+          `<a class="badge" href="#groups/${encodeURIComponent(keyGroups.groupIds[index])}">${escapeHtml(name)}</a>`
+        ).join("")}</div>`
+      : `<span class="cell-sub">No groups</span>`;
+    const warning = hasGroups
+      ? ""
+      : `<button class="warn-button" type="button" data-action="toggle-help" data-owner-id="client-${escapeAttr(key.id)}"
+          data-help="This client key has no groups yet, so it is not yet accessible by any users in any group. Assign it to a group to grant access."
+          aria-label="No groups">!</button>`;
+
+    return `
     <tr>
       <td>
-        <div class="cell-main">${escapeHtml(key.name)}</div>
+        <div class="cell-main">
+          <span>${escapeHtml(key.name)}</span>
+          ${warning}
+        </div>
         <div class="cell-sub">${escapeHtml(key.keyPrefix)}...</div>
       </td>
       <td>${formatDate(key.createdAtUtc)}</td>
       <td>${key.lastUsedUtc ? formatDate(key.lastUsedUtc) : "Never"}</td>
+      <td>${groupsCell}</td>
       <td>
-        <button class="button danger" data-action="delete-client-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
+        <div class="actions">
+          <button class="button secondary" data-action="manage-client-key-groups" data-key-id="${escapeAttr(key.id)}" data-key-name="${escapeAttr(key.name)}">Manage groups</button>
+          <button class="button danger" data-action="delete-client-key" data-key-id="${escapeAttr(key.id)}">Delete</button>
+        </div>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 
   return `
     <table>
@@ -897,6 +1013,7 @@ function clientKeysTable(keys) {
           <th>Name</th>
           <th>Created</th>
           <th>Last used</th>
+          <th>Groups</th>
           <th></th>
         </tr>
       </thead>
@@ -975,17 +1092,18 @@ async function loadGroupDetail(groupId, showLoading = true) {
   }
 
   try {
-    const [group, clients, userKeyGroups, billing, rules, payments, balance] = await Promise.all([
+    const [group, clients, userKeyGroups, clientKeyGroups, billing, rules, payments, balance] = await Promise.all([
       api(`/groups/${encodeURIComponent(groupId)}`),
       api(`/groups/${encodeURIComponent(groupId)}/clients`),
       api("/user-keys/groups"),
+      api("/client-keys/groups"),
       api(`/groups/${encodeURIComponent(groupId)}/billing`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/rules`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/payments`),
       api(`/groups/${encodeURIComponent(groupId)}/billing/balance`)
     ]);
 
-    state.groupDetail = { group, clients, userKeyGroups, billing, rules, payments, balance };
+    state.groupDetail = { group, clients, userKeyGroups, clientKeyGroups, billing, rules, payments, balance };
     renderGroupDetail();
   } catch (error) {
     patchContent(`<div class="panel"><div class="empty">${escapeHtml(error.message)}</div></div>`);
@@ -993,12 +1111,18 @@ async function loadGroupDetail(groupId, showLoading = true) {
 }
 
 function renderGroupDetail() {
-  const { group, clients, userKeyGroups, billing, rules, payments, balance } = state.groupDetail;
+  const { group, clients, userKeyGroups, clientKeyGroups, billing, rules, payments, balance } = state.groupDetail;
   const allUserKeys = state.summary?.userKeys || [];
+  const allClientKeys = state.summary?.clientKeys || [];
   const assignedKeyIds = new Set(
     userKeyGroups
       .filter((akg) => akg.userKeyId && (akg.groupIds || []).includes(group.id))
       .map((akg) => akg.userKeyId)
+  );
+  const assignedClientKeyIds = new Set(
+    clientKeyGroups
+      .filter((akg) => akg.clientKeyId && (akg.groupIds || []).includes(group.id))
+      .map((akg) => akg.clientKeyId)
   );
 
   pageTitle.textContent = "Group Detail";
@@ -1072,6 +1196,14 @@ function renderGroupDetail() {
       </div>
       <div class="table-wrap">
         ${allUserKeys.length ? userKeyAssignmentTable(allUserKeys, group.id, assignedKeyIds) : emptyState("No user keys have been created.")}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Client key assignments</h2>
+      </div>
+      <div class="table-wrap">
+        ${allClientKeys.length ? clientKeyAssignmentTable(allClientKeys, group.id, assignedClientKeyIds) : emptyState("No client keys have been created.")}
       </div>
     </div>
     <div class="panel">
@@ -1255,6 +1387,39 @@ function userKeyAssignmentTable(userKeys, groupId, assignedKeyIds) {
   `;
 }
 
+function clientKeyAssignmentTable(clientKeys, groupId, assignedKeyIds) {
+  const rows = clientKeys.map((key) => {
+    const isAssigned = assignedKeyIds.has(key.id);
+    return `
+      <tr>
+        <td>
+          <div class="cell-main">${escapeHtml(key.name)}</div>
+          <div class="cell-sub">${escapeHtml(key.keyPrefix)}...</div>
+        </td>
+        <td>
+          <button class="button ${isAssigned ? "danger" : "secondary"}"
+            data-action="toggle-client-key-assignment"
+            data-group-id="${escapeAttr(groupId)}"
+            data-key-id="${escapeAttr(key.id)}"
+            data-assigned="${isAssigned}">${isAssigned ? "Remove" : "Assign"}</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <table>
+      <thead>
+        <tr>
+          <th>Client key</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 async function toggleUserKeyAssignment(groupId, keyId, currentlyAssigned) {
   const userKeyGroups = state.groupDetail?.userKeyGroups || [];
   const allUserKeys = state.summary?.userKeys || [];
@@ -1275,6 +1440,28 @@ async function toggleUserKeyAssignment(groupId, keyId, currentlyAssigned) {
   });
 
   setNotice(currentlyAssigned ? "User key unassigned from group." : "User key assigned to group.");
+  await loadGroupDetail(groupId);
+}
+
+async function toggleClientKeyAssignment(groupId, keyId, currentlyAssigned) {
+  const clientKeyGroups = state.groupDetail?.clientKeyGroups || [];
+
+  const keyGroups = clientKeyGroups.find((ckg) => ckg.clientKeyId === keyId);
+  const currentGroupIds = keyGroups ? [...keyGroups.groupIds] : [];
+
+  let newGroupIds;
+  if (currentlyAssigned) {
+    newGroupIds = currentGroupIds.filter((id) => id !== groupId);
+  } else {
+    newGroupIds = [...currentGroupIds, groupId];
+  }
+
+  await api(`/client-keys/${encodeURIComponent(keyId)}/groups`, {
+    method: "PUT",
+    body: { groupIds: newGroupIds }
+  });
+
+  setNotice(currentlyAssigned ? "Client key unassigned from group." : "Client key assigned to group.");
   await loadGroupDetail(groupId);
 }
 
@@ -1743,6 +1930,136 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value);
+}
+
+function showUserKeyGroupsModal(userKeyId, keyName) {
+  return new Promise((resolve, reject) => {
+    const groups = state.summary?.groups || [];
+    const userKeyGroups = state.summary?.userKeyGroups || [];
+    const current = userKeyGroups.find((info) => info.userKeyId === userKeyId);
+    const assigned = new Set(current ? current.groupIds : []);
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-dialog">
+        <h3>Manage groups for &quot;${escapeHtml(keyName || userKeyId)}&quot;</h3>
+        <p class="field-label">User keys only get access to the models of the groups they are assigned to.</p>
+        ${groups.length
+          ? `<div class="key-group-list">${groups.map((group) => `
+              <label class="key-group-item">
+                <input type="checkbox" value="${escapeAttr(group.id)}" ${assigned.has(group.id) ? "checked" : ""}>
+                <span>${escapeHtml(group.name)}</span>
+              </label>
+            `).join("")}</div>`
+          : `<div class="empty">No groups have been created yet.</div>`}
+        <div class="form-row modal-actions">
+          <button class="button secondary" id="ug-cancel" type="button">Cancel</button>
+          <button class="button" id="ug-save" type="button">Save</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        reject(new Error("Cancelled"));
+        close();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+
+    overlay.querySelector("#ug-cancel").addEventListener("click", () => {
+      reject(new Error("Cancelled"));
+      close();
+    });
+
+    overlay.querySelector("#ug-save").addEventListener("click", () => {
+      const groupIds = [...overlay.querySelectorAll('input[type="checkbox"]:checked')].map((box) => box.value);
+      close();
+      resolve({ groupIds });
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        reject(new Error("Cancelled"));
+        close();
+      }
+    });
+  });
+}
+
+function showClientKeyGroupsModal(clientKeyId, keyName) {
+  return new Promise((resolve, reject) => {
+    const groups = state.summary?.groups || [];
+    const clientKeyGroups = state.summary?.clientKeyGroups || [];
+    const current = clientKeyGroups.find((info) => info.clientKeyId === clientKeyId);
+    const assigned = new Set(current ? current.groupIds : []);
+
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-dialog">
+        <h3>Manage groups for &quot;${escapeHtml(keyName || clientKeyId)}&quot;</h3>
+        <p class="field-label">Client keys only get access to the models of the groups they are assigned to.</p>
+        ${groups.length
+          ? `<div class="key-group-list">${groups.map((group) => `
+              <label class="key-group-item">
+                <input type="checkbox" value="${escapeAttr(group.id)}" ${assigned.has(group.id) ? "checked" : ""}>
+                <span>${escapeHtml(group.name)}</span>
+              </label>
+            `).join("")}</div>`
+          : `<div class="empty">No groups have been created yet.</div>`}
+        <div class="form-row modal-actions">
+          <button class="button secondary" id="cg-cancel" type="button">Cancel</button>
+          <button class="button" id="cg-save" type="button">Save</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        reject(new Error("Cancelled"));
+        close();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+
+    overlay.querySelector("#cg-cancel").addEventListener("click", () => {
+      reject(new Error("Cancelled"));
+      close();
+    });
+
+    overlay.querySelector("#cg-save").addEventListener("click", () => {
+      const groupIds = [...overlay.querySelectorAll('input[type="checkbox"]:checked')].map((box) => box.value);
+      close();
+      resolve({ groupIds });
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        reject(new Error("Cancelled"));
+        close();
+      }
+    });
+  });
 }
 
 function showDisableModal(clientId) {
