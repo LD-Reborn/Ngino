@@ -839,7 +839,7 @@ async function runModelCommand(clientId, model, action) {
 function renderUserKeys() {
   const keys = state.summary?.userKeys || [];
   pageTitle.textContent = "User Keys";
-  pageSubtitle.textContent = "Keys accepted by the proxy token header, bearer auth, query token, and token path.";
+  pageSubtitle.textContent = "Keys accepted by the proxy token header, bearer auth, and token path. Query tokens work only on the status and tunnel endpoints.";
 
   patchContent(`
     ${state.newKey ? newKeyPanel(state.newKey, "New user key") : ""}
