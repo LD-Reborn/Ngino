@@ -106,7 +106,7 @@ internal static class AdminEndpoints
                     return Results.Content(SetupPage("Passwords do not match.", tokens.RequestToken!), "text/html");
                 }
 
-                var user = new ApplicationUser { UserName = username, Email = email };
+                var user = new ApplicationUser { UserName = username, Email = string.IsNullOrWhiteSpace(email) ? null : email };
                 var result = await signInManager.UserManager.CreateAsync(user, password);
                 if (result.Succeeded)
                 {
