@@ -7,6 +7,7 @@ namespace Ngino.Server;
 internal sealed class TunnelConnection
 {
     private readonly ConcurrentDictionary<string, PendingCommand> _commands = new();
+    private readonly Func<GroupAccess?>? _accessProvider;
     private readonly object _modelsLock = new();
     private readonly ConcurrentDictionary<string, PendingProxyRequest> _pending = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -16,11 +17,16 @@ internal sealed class TunnelConnection
     private string[] _models = [];
     private DateTimeOffset? _modelsUpdatedAt;
 
-    public TunnelConnection(string clientId, WebSocket socket, ILogger<TunnelConnection> logger)
+    public TunnelConnection(
+        string clientId,
+        WebSocket socket,
+        ILogger<TunnelConnection> logger,
+        Func<GroupAccess?>? accessProvider = null)
     {
         ClientId = clientId;
         _socket = socket;
         _logger = logger;
+        _accessProvider = accessProvider;
     }
 
     public string ClientId { get; }
@@ -103,16 +109,19 @@ internal sealed class TunnelConnection
 
     public void UpdateModels(IEnumerable<string> models, IEnumerable<string> activeModels)
     {
+        var access = _accessProvider?.Invoke();
         var snapshot = models
             .Where(model => !string.IsNullOrWhiteSpace(model))
             .Select(model => model.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(model => access is null || access.IsClientModelAllowed(ClientId, model))
             .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var activeSnapshot = activeModels
             .Where(model => !string.IsNullOrWhiteSpace(model))
             .Select(model => model.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(model => access is null || access.IsClientModelAllowed(ClientId, model))
             .OrderBy(model => model, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
