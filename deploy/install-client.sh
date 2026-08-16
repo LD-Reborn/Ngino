@@ -264,7 +264,7 @@ fi
 # ── Build client from source ─────────────────────────────────────────────────
 CLIENT_SRC="$REPO_ROOT/src/Ngino.Client"
 if [[ ! -d "$CLIENT_SRC" ]]; then
-    die "Client source not found at $CLIENT_SRC. Run this script from the repository or pass --install-dir."
+    die "Client source not found at $CLIENT_SRC. Expected '<repo>/deploy/install-client.sh' and '<repo>/src/Ngino.Client'."
 fi
 
 ARCH="$(uname -m)"
