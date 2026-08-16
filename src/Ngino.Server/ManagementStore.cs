@@ -2268,6 +2268,7 @@ internal sealed class ManagementStore
                 );
                 """;
             command.ExecuteNonQuery();
+        }
 
         using (var migrate = connection.CreateCommand())
         {
@@ -2444,7 +2445,6 @@ internal sealed class ManagementStore
                 rename.CommandText = "ALTER TABLE api_keys RENAME TO user_keys";
                 rename.ExecuteNonQuery();
             }
-        }
         }
 
         using (var command = connection.CreateCommand())

@@ -1,7 +1,7 @@
 using Ngino.Server;
 using Xunit;
 
-namespace ReverseLlama.Client.Tests;
+namespace Ngino.Client.Tests;
 
 public class KeepaliveCoordinatorTests
 {

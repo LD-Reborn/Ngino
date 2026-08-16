@@ -7,5 +7,5 @@ public static class ProtocolConstants
     public const string TokenHeader = "X-Ngino-Token";
     public const string ClientIdHeader = "X-Ngino-Client-Id";
     public const string ReplacedCloseDescription = "ngino-replaced";
-public const string ModelHeader = "X-Ngino-Model";
+    public const string ModelHeader = "X-Ngino-Model";
 }
