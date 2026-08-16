@@ -106,6 +106,37 @@ Client options:
 - `--reconnect-delay <seconds>` or `NGINO_RECONNECT_DELAY_SECONDS`: defaults to `5`.
 - `--chunk-size <bytes>` or `NGINO_CHUNK_SIZE`: defaults to `65536`.
 
+### Setting client options via environment variables
+
+Every client option can be supplied either as a `--<name>` command line argument or as a `NGINO_<NAME>` environment variable (e.g. `--llama-cpp-parallel 8` and `NGINO_LLAMA_CPP_PARALLEL=8`). Where the installed service stores those variables depends on the operating system:
+
+**Linux (systemd):** the service reads them from `/etc/ngino-client/env` via `EnvironmentFile=`. Each line is `NAME=value`. Edit the file and restart the service:
+
+```bash
+sudo nano /etc/ngino-client/env
+# NGINO_SERVER=https://ai.domain.tld
+# NGINO_TOKEN=change-me
+# NGINO_USE_LLAMA_CPP_VIA_DOCKER=true
+# NGINO_USE_OLLAMA_MODELS_PATH=/usr/share/ollama/.ollama/models
+# NGINO_LLAMA_CPP_PARALLEL=8
+sudo systemctl restart ngino-client
+```
+
+**Windows (service):** there is no env file; the variables are stored in the service registry key under the `Environment` multi-string value. Edit it and restart the service:
+
+```powershell
+$path = "HKLM:\SYSTEM\CurrentControlSet\Services\NginoClient"
+$values = @(
+    "NGINO_SERVER=https://ai.domain.tld",
+    "NGINO_TOKEN=change-me",
+    "NGINO_USE_LLAMA_CPP_VIA_DOCKER=true",
+    "NGINO_USE_OLLAMA_MODELS_PATH=C:\Users\user\.ollama\models",
+    "NGINO_LLAMA_CPP_PARALLEL=8"
+)
+Set-ItemProperty -Path $path -Name Environment -Value $values
+Restart-Service NginoClient
+```
+
 The token is accepted as `X-Ngino-Token`, as `Authorization: Bearer <token>`, or as a path prefix like `/token/<token>/api/tags` or `/token/<token>/clients/{id}/v1`. The Bearer form lets OpenAI-compatible clients (e.g. n8n's OpenAI nodes pointed at `/clients/{id}/v1`) authenticate with their API-key field. The path-token form is useful for clients that cannot send custom headers. The server strips its own token header/Bearer value and removes the path prefix before forwarding; any other `Authorization` value is forwarded untouched.
 
 ## Multiple clients
@@ -144,15 +175,15 @@ Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--insta
 
 llama.cpp via Docker options (replaces Ollama for inferencing):
 
-| Option | Description |
-|--------|-------------|
-| `--use-llama-cpp-via-docker` | Use llama.cpp Docker containers instead of Ollama |
-| `--use-ollama-models-path <dir>` | Path to Ollama models directory (`manifests/blobs`); required with the flag above |
-| `--llama-cpp-docker-image <img>` | Docker image; defaults to auto-detected (rocm/cuda/cpu) |
-| `--llama-cpp-base-port <num>` | Base port for containers; defaults to `8081` |
-| `--llama-cpp-parallel <num>` | llama.cpp parallel slots per container; if unset, llama.cpp's own default is used (which is `1`) |
-| `--llama-cpp-fallback-cooldown <sec>` | Seconds before llama.cpp is retried after a failed container start; defaults to `180` |
-| `--log-dir <dir>` | Directory for log files; defaults to `<app dir>/Logs` |
+| Option | Env variable | Description |
+|--------|--------------|-------------|
+| `--use-llama-cpp-via-docker` | `NGINO_USE_LLAMA_CPP_VIA_DOCKER` | Use llama.cpp Docker containers instead of Ollama |
+| `--use-ollama-models-path <dir>` | `NGINO_USE_OLLAMA_MODELS_PATH` | Path to Ollama models directory (`manifests/blobs`); required with the flag above |
+| `--llama-cpp-docker-image <img>` | `NGINO_LLAMA_CPP_DOCKER_IMAGE` | Docker image; defaults to auto-detected (rocm/cuda/cpu) |
+| `--llama-cpp-base-port <num>` | `NGINO_LLAMA_CPP_BASE_PORT` | Base port for containers; defaults to `8081` |
+| `--llama-cpp-parallel <num>` | `NGINO_LLAMA_CPP_PARALLEL` | llama.cpp parallel slots per container; if unset, llama.cpp's own default is used (which is `1`) |
+| `--llama-cpp-fallback-cooldown <sec>` | `NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS` | Seconds before llama.cpp is retried after a failed container start; defaults to `180` |
+| `--log-dir <dir>` | `NGINO_LOG_DIR` | Directory for log files; defaults to `<app dir>/Logs` |
 
 ### llama.cpp fallback to Ollama
 
