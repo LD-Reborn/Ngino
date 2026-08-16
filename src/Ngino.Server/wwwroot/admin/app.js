@@ -82,7 +82,7 @@ function toggleHelpPopover(button) {
     positionPopover(popover, button);
     document.body.appendChild(popover);
   } else {
-    host.appendChild(popover);
+    (button.closest("label") || host).appendChild(popover);
   }
 
   button.classList.add("active");
@@ -335,31 +335,35 @@ content.addEventListener("submit", async (event) => {
       await loadGroupDetail(groupId);
     }
 
-    if (form.dataset.form === "add-client") {
+    if (form.dataset.form === "add-model") {
       const groupId = form.dataset.groupId;
-      const body = {};
-      if (data.clientId && data.clientId.trim()) {
-        body.clientId = data.clientId.trim();
+      const model = data.model ? data.model.trim() : "";
+      if (!model) {
+        throw new Error("Model is required.");
       }
-      if (data.model && data.model.trim()) {
-        body.model = data.model.trim();
+      const availableModels = (state.summary?.models || []).map((m) => m.name);
+      if (availableModels.length && !availableModels.some((name) => modelSelectorMatches(model, name))) {
+        const confirmed = await showConfirmModal(
+          "The model selector you entered does not currently select any available models. Are you sure?",
+          "Add anyway"
+        ).then(() => true, () => false);
+        if (!confirmed) {
+          form.reset();
+          return;
+        }
       }
-      if (data.clientPattern && data.clientPattern.trim()) {
-        body.clientPattern = data.clientPattern.trim();
-      }
-      body.keepaliveInstancesToKeepAlive = parseInt(data.keepaliveInstancesToKeepAlive, 10) || 1;
-      body.keepaliveMaxParallelismPerClient = parseInt(data.keepaliveMaxParallelismPerClient, 10) || 1;
-      body.keepaliveParallelismHeadroom = parseInt(data.keepaliveParallelismHeadroom, 10) || 1;
-
-      if (!body.clientId && !body.clientPattern) {
-        throw new Error("Either Client ID or Client pattern is required.");
-      }
+      const body = {
+        model,
+        keepaliveInstancesToKeepAlive: parseInt(data.keepaliveInstancesToKeepAlive, 10) || 0,
+        keepaliveMaxParallelismPerClient: parseInt(data.keepaliveMaxParallelismPerClient, 10) || 1,
+        keepaliveParallelismHeadroom: parseInt(data.keepaliveParallelismHeadroom, 10) || 0
+      };
 
       await api(`/groups/${encodeURIComponent(groupId)}/clients`, {
         method: "POST",
         body
       });
-      setNotice("Client added.");
+      setNotice("Model added.");
       form.reset();
       await loadGroupDetail(groupId);
     }
@@ -1114,6 +1118,7 @@ function renderGroupDetail() {
   const { group, clients, userKeyGroups, clientKeyGroups, billing, rules, payments, balance } = state.groupDetail;
   const allUserKeys = state.summary?.userKeys || [];
   const allClientKeys = state.summary?.clientKeys || [];
+  const availableModelNames = (state.summary?.models || []).map((model) => model.name);
   const assignedKeyIds = new Set(
     userKeyGroups
       .filter((akg) => akg.userKeyId && (akg.groupIds || []).includes(group.id))
@@ -1148,46 +1153,39 @@ function renderGroupDetail() {
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>Add client</h2>
+        <h2>Add model</h2>
       </div>
       <div class="panel-body">
-        <form class="form-row" data-form="add-client" data-group-id="${escapeAttr(group.id)}">
+        <form class="form-row" data-form="add-model" data-group-id="${escapeAttr(group.id)}">
           <div class="field">
-            <label for="addClientClientId">Client ID</label>
-            <input class="input" id="addClientClientId" name="clientId" placeholder="Client_1">
+            ${renderFieldLabel("addModel", "Model", "An exact model name or a regex pattern is allowed. The models are served to all clients in the group.")}
+            <input class="input" id="addModel" name="model" placeholder="bge-m3:latest" list="availableModels" required>
+            ${availableModelNames.length ? `<datalist id="availableModels">${availableModelNames.map((name) => `<option value="${escapeAttr(name)}"></option>`).join("")}</datalist>` : ""}
           </div>
           <div class="field">
-            <label for="addClientModel">Model (optional)</label>
-            <input class="input" id="addClientModel" name="model" placeholder="bge-m3">
+            ${renderFieldLabel("addModelKeepaliveInstances", "Min always loaded instances", "The minimum number of warm model instances that should stay loaded and ready so requests do not wait for a cold start. Set to 0 to keep none loaded between requests.")}
+            <input class="input" id="addModelKeepaliveInstances" name="keepaliveInstancesToKeepAlive" type="number" min="0" step="1" value="0">
           </div>
           <div class="field">
-            <label for="addClientPattern">Client pattern (regex, optional)</label>
-            <input class="input" id="addClientPattern" name="clientPattern" placeholder="GPU_[0-9]*">
+            ${renderFieldLabel("addModelKeepaliveMaxParallelism", "Max parallelism per client", "The maximum number of concurrent requests this client can handle at once. Higher values let one client absorb more traffic, but too many can overload the GPU.")}
+            <input class="input" id="addModelKeepaliveMaxParallelism" name="keepaliveMaxParallelismPerClient" type="number" min="1" step="1" value="1">
           </div>
           <div class="field">
-            ${renderFieldLabel("addClientKeepaliveInstances", "Min always loaded instances", "The minimum number of warm model instances that should stay loaded and ready so requests do not wait for a cold start.")}
-            <input class="input" id="addClientKeepaliveInstances" name="keepaliveInstancesToKeepAlive" type="number" min="1" step="1" value="1">
+            ${renderFieldLabel("addModelKeepaliveHeadroom", "Parallelism headroom", "How much spare parallelism to leave unused so traffic spikes can be absorbed without saturating the GPU. A larger headroom makes routing more conservative. Set to 0 for no headroom.")}
+            <input class="input" id="addModelKeepaliveHeadroom" name="keepaliveParallelismHeadroom" type="number" min="0" step="1" value="0">
           </div>
-          <div class="field">
-            ${renderFieldLabel("addClientKeepaliveMaxParallelism", "Max parallelism per client", "The maximum number of concurrent requests this client can handle at once. Higher values let one client absorb more traffic, but too many can overload the GPU.")}
-            <input class="input" id="addClientKeepaliveMaxParallelism" name="keepaliveMaxParallelismPerClient" type="number" min="1" step="1" value="1">
-          </div>
-          <div class="field">
-            ${renderFieldLabel("addClientKeepaliveHeadroom", "Parallelism headroom", "How much spare parallelism to leave unused so traffic spikes can be absorbed without saturating the GPU. A larger headroom makes routing more conservative.")}
-            <input class="input" id="addClientKeepaliveHeadroom" name="keepaliveParallelismHeadroom" type="number" min="1" step="1" value="1">
-          </div>
-          <button class="button" type="submit">Add</button>
+          <button class="button" type="submit">Add model</button>
         </form>
-        <div class="cell-sub" style="margin-top:8px">Provide either a Client ID (for explicit client access) or a Client pattern (for regex-based matching). Model is optional to restrict to a specific model. Keepalive defaults to 1 instance, 1 parallelism, and 1 headroom.</div>
+        <div class="cell-sub" style="margin-top:8px">The model is served to all clients in the group. A regex pattern is also allowed (e.g. <span class="code-inline">bge-m3.*</span>). Keepalive settings control warm instances and parallelism.</div>
       </div>
     </div>
     <div class="panel">
       <div class="panel-header">
-        <h2>Clients</h2>
+        <h2>Models</h2>
         <span class="badge">${clients.length} total</span>
       </div>
       <div class="table-wrap">
-        ${clients.length ? groupClientsTable(clients, group.id) : emptyState("No clients in this group.")}
+        ${clients.length ? groupModelsTable(clients, group.id) : emptyState("No models have been added to this group.")}
       </div>
     </div>
     <div class="panel">
@@ -1310,30 +1308,41 @@ function formatKeepalivePolicy(policy) {
   `;
 }
 
-function groupClientsTable(clients, groupId) {
-  const rows = clients.map((client) => `
+function modelSelectorMatches(selector, model) {
+  if (!selector || !model) {
+    return false;
+  }
+  const s = selector.trim();
+  const m = model.trim();
+  if (s.toLowerCase() === m.toLowerCase()) {
+    return true;
+  }
+  if (stripLatestTag(s).toLowerCase() === stripLatestTag(m).toLowerCase()) {
+    return true;
+  }
+  try {
+    return new RegExp(s, "i").test(m);
+  } catch {
+    return false;
+  }
+}
+
+function stripLatestTag(model) {
+  return model.toLowerCase().endsWith(":latest") ? model.slice(0, -7) : model;
+}
+
+function groupModelsTable(models, groupId) {
+  const rows = models.map((model) => `
     <tr>
       <td>
-        ${client.clientId
-          ? `<div class="cell-main">${escapeHtml(client.clientId)}</div>`
-          : `<div class="cell-sub">-</div>`
-        }
-      </td>
-      <td>
-        ${client.model
-          ? `<div class="cell-main">${escapeHtml(client.model)}</div>`
+        ${model.model
+          ? `<div class="cell-main">${escapeHtml(model.model)}</div>`
           : `<div class="cell-sub">All models</div>`
         }
       </td>
+      <td>${formatKeepalivePolicy(model.keepalivePolicy)}</td>
       <td>
-        ${client.clientPattern
-          ? `<div class="cell-main code-inline">${escapeHtml(client.clientPattern)}</div>`
-          : `<div class="cell-sub">-</div>`
-        }
-      </td>
-      <td>${formatKeepalivePolicy(client.keepalivePolicy)}</td>
-      <td>
-        <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${client.id}">Remove</button>
+        <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${model.id}">Remove</button>
       </td>
     </tr>
   `).join("");
@@ -1342,9 +1351,7 @@ function groupClientsTable(clients, groupId) {
     <table>
       <thead>
         <tr>
-          <th>Client ID</th>
           <th>Model</th>
-          <th>Client pattern</th>
           <th>Keepalive policy</th>
           <th></th>
         </tr>
@@ -2179,6 +2186,57 @@ function showDisableModal(clientId) {
     overlay.addEventListener("click", (e) => {
       if (e.target === overlay) {
         overlay.remove();
+        reject(new Error("Cancelled"));
+      }
+    });
+  });
+}
+
+function showConfirmModal(message, confirmLabel = "Confirm") {
+  return new Promise((resolve, reject) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-dialog">
+        <h3>Confirm</h3>
+        <p class="field-label">${escapeHtml(message)}</p>
+        <div class="form-row modal-actions">
+          <button class="button secondary" id="confirm-cancel" type="button">Cancel</button>
+          <button class="button warning" id="confirm-ok" type="button">${escapeHtml(confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        close();
+        reject(new Error("Cancelled"));
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+
+    overlay.querySelector("#confirm-cancel").addEventListener("click", () => {
+      close();
+      reject(new Error("Cancelled"));
+    });
+
+    overlay.querySelector("#confirm-ok").addEventListener("click", () => {
+      close();
+      resolve(true);
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        close();
         reject(new Error("Cancelled"));
       }
     });
