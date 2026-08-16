@@ -52,26 +52,28 @@ The client provides a persistent outbound connection to the server and forwards 
 Start the server:
 
 ```powershell
-dotnet run --project src/Ngino.Server --urls http://0.0.0.0:5050 -- --token "change-me"
+dotnet run --project src/Ngino.Server --urls http://0.0.0.0:5050
 ```
 
-Start the client on the GPU workstation:
+Open `http://your-server:5050/admin`, log in, and create a **user key** (for API access) and a **client key** (for the tunnel client). Make sure to write them down, as they are only shown once each.
+
+Start the client on the GPU workstation, passing the client key as the token:
 
 ```powershell
-dotnet run --project src/Ngino.Client -- --server http://your-server:5050 --upstream http://localhost:11434 --token "change-me"
+dotnet run --project src/Ngino.Client -- --server http://your-server:5050 --upstream http://localhost:11434 --token "<client-key>"
 ```
 
-Call Ollama through the server. Model-bearing requests on the root path are routed to a connected client that reports that model, preferring the client with the fewest in-flight requests. You can still address one client explicitly by id:
+Call Ollama through the server using the user key. Model-bearing requests on the root path are routed to a connected client that reports that model, preferring the client with the fewest in-flight requests. You can still address one client explicitly by id:
 
 ```powershell
-curl.exe -H "X-Ngino-Token: change-me" http://your-server:5050/api/tags
-curl.exe -H "X-Ngino-Token: change-me" http://your-server:5050/clients/gpu-01/api/tags
-curl.exe http://your-server:5050/token/change-me/api/tags
-curl.exe http://your-server:5050/token/change-me/clients/gpu-01/api/tags
+curl.exe -H "X-Ngino-Token: <user-key>" http://your-server:5050/api/tags
+curl.exe -H "X-Ngino-Token: <user-key>" http://your-server:5050/clients/gpu-01/api/tags
+curl.exe http://your-server:5050/token/<user-key>/api/tags
+curl.exe http://your-server:5050/token/<user-key>/clients/gpu-01/api/tags
 ```
 
 ```powershell
-curl.exe -H "X-Ngino-Token: change-me" `
+curl.exe -H "X-Ngino-Token: <user-key>" `
   -H "Content-Type: application/json" `
   -d '{"model":"llama3.1","prompt":"hello"}' `
   http://your-server:5050/api/generate
@@ -81,7 +83,8 @@ curl.exe -H "X-Ngino-Token: change-me" `
 
 Server options:
 
-- `--token <value>` or `NGINO_TOKEN`: optional shared token. If set, proxy calls must authenticate with `X-Ngino-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix.
+- `--token <value>` or `NGINO_TOKEN`: optional shared secret for proxy calls (user auth). If set, proxy calls may authenticate with `X-Ngino-Token`, `Authorization: Bearer <token>`, or the `/token/<token>/...` path prefix instead of a user key. If unset, proxy calls require a user key created in the admin UI.
+- `--client-token <value>` or `NGINO_CLIENT_TOKEN`: optional shared secret for tunnel client connections. If set, clients may authenticate with this value instead of a client key created in the admin UI. If unset, tunnel clients must present a client key. Not needed for the normal admin-UI workflow.
 - `--tunnel-path <path>`: defaults to `/_ngino/tunnel`.
 - `--status-path <path>`: defaults to `/_ngino/status`.
 - `--chunk-size <bytes>` or `NGINO_CHUNK_SIZE`: defaults to `65536`.
@@ -94,13 +97,14 @@ Admin UI:
 - `GET /admin` opens the Keycloak-protected management UI.
 - The temporary Keycloak settings live under `Authentication:Keycloak` in `appsettings.json`.
 - User keys created in the UI are accepted anywhere the shared token is accepted: `X-Ngino-Token`, `Authorization: Bearer <key>`, `?token=...`, and `/token/<key>/...`.
+- Client keys created in the UI authorize tunnel connections on the tunnel endpoint. Pass the key to the client via its `--token`/`NGINO_TOKEN`. Client keys are only accepted on the tunnel endpoint, and user keys are only accepted on the proxy endpoints.
 - Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`).
 
 Client options:
 
 - `--server <url>` or `NGINO_SERVER`: server base URL, for example `http://your-server:5050`.
 - `--upstream <url>` or `NGINO_UPSTREAM`: local Ollama URL, defaults to `http://localhost:11434`.
-- `--token <value>` or `NGINO_TOKEN`: optional shared token.
+- `--token <value>` or `NGINO_TOKEN`: the client key created in the admin UI, or the server's `--client-token` shared secret if that is configured. Sent to the server as `X-Ngino-Token` to authenticate the tunnel connection.
 - `--client-id <name>` or `NGINO_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
 - `--tunnel-path <path>` or `NGINO_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.
 - `--reconnect-delay <seconds>` or `NGINO_RECONNECT_DELAY_SECONDS`: defaults to `5`.
@@ -115,7 +119,7 @@ Every client option can be supplied either as a `--<name>` command line argument
 ```bash
 sudo nano /etc/ngino-client/env
 # NGINO_SERVER=https://ai.domain.tld
-# NGINO_TOKEN=change-me
+# NGINO_TOKEN=<client-key>
 # NGINO_USE_LLAMA_CPP_VIA_DOCKER=true
 # NGINO_USE_OLLAMA_MODELS_PATH=/usr/share/ollama/.ollama/models
 # NGINO_LLAMA_CPP_PARALLEL=8
@@ -128,7 +132,7 @@ sudo systemctl restart ngino-client
 $path = "HKLM:\SYSTEM\CurrentControlSet\Services\NginoClient"
 $values = @(
     "NGINO_SERVER=https://ai.domain.tld",
-    "NGINO_TOKEN=change-me",
+    "NGINO_TOKEN=<client-key>",
     "NGINO_USE_LLAMA_CPP_VIA_DOCKER=true",
     "NGINO_USE_OLLAMA_MODELS_PATH=C:\Users\user\.ollama\models",
     "NGINO_LLAMA_CPP_PARALLEL=8"
@@ -160,18 +164,18 @@ The authenticated status endpoint reports whether the cache is available, plus t
 Linux:
 
 ```bash
-sudo bash deploy/install-client.sh --server http://your-server:5050 --token "change-me"
+sudo bash deploy/install-client.sh --server http://your-server:5050 --token "<client-key>"
 ```
 or using ollama models with llama.cpp backend using ROCm:
 ```bash
-sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-rocm   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "<client-key>"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-rocm   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
 ```
 or using ollama models with llama.cpp backend using CUDA:
 ```bash
-sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "change-me"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-cuda   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
+sudo bash deploy/install-client.sh   --server https://ai.domain.tld   --token "<client-key>"   --use-llama-cpp-via-docker   --use-ollama-models-path /usr/share/ollama/.ollama/models   --llama-cpp-docker-image ghcr.io/ggml-org/llama.cpp:server-cuda   --llama-cpp-base-port 8081   --llama-cpp-parallel 128
 ```
 
-Options: `--server`, `--token` (required); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
+Options: `--server`, `--token` (required; the client key from the admin UI); `--client-id`, `--upstream`, `--install-dir`, `--service-name`, `--no-ollama` (optional). Missing required values are prompted interactively.
 
 llama.cpp via Docker options (replaces Ollama for inferencing):
 

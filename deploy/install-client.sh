@@ -44,7 +44,7 @@ Installs the Ngino client as a systemd service on Linux.
 
 Required:
   --server <url>       Ngino server URL (e.g. http://my-server:5050)
-  --token <value>      Shared secret token for the server
+  --token <value>      Client key from the admin UI (or the server's --client-token value)
 
 Optional:
   --client-id <name>   Client identifier; defaults to hostname
@@ -68,9 +68,9 @@ Optional:
   -h, --help           Show this help message
 
 Examples:
-  $0 --server http://gpu-server:5050 --token "my-secret"
-  $0 --server http://gpu-server:5050 --token "my-secret" --no-ollama
-  $0 --server http://gpu-server:5050 --token "my-secret" \\
+  $0 --server http://gpu-server:5050 --token "<client-key>"
+  $0 --server http://gpu-server:5050 --token "<client-key>" --no-ollama
+  $0 --server http://gpu-server:5050 --token "<client-key>" \\
      --use-llama-cpp-via-docker --use-ollama-models-path /usr/share/ollama/.ollama/models \\
      --llama-cpp-parallel 128
 EOF
@@ -108,7 +108,7 @@ if [[ -z "$SERVER_URL" ]]; then
 fi
 
 if [[ -z "$TOKEN" ]]; then
-    read -rsp "Server token: " TOKEN
+    read -rsp "Client key (create it in the admin UI): " TOKEN
     echo
 fi
 if [[ -z "$TOKEN" ]]; then

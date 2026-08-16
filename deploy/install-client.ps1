@@ -52,7 +52,7 @@ if ([string]::IsNullOrWhiteSpace($Server)) {
 if ([string]::IsNullOrWhiteSpace($Server)) { throw "Server URL is required." }
 
 if ([string]::IsNullOrWhiteSpace($Token)) {
-    $secureToken = Read-Host "Server token" -AsSecureString
+    $secureToken = Read-Host "Client key (create it in the admin UI)" -AsSecureString
     $tokenPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
     try { $Token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPointer) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPointer) }
