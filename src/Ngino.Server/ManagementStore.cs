@@ -913,9 +913,9 @@ internal sealed class ManagementStore
             throw new ArgumentException("Group id is required.", nameof(groupId));
         }
 
-        if (string.IsNullOrWhiteSpace(clientId) && string.IsNullOrWhiteSpace(clientPattern))
+        if (string.IsNullOrWhiteSpace(clientId) && string.IsNullOrWhiteSpace(clientPattern) && string.IsNullOrWhiteSpace(model))
         {
-            throw new ArgumentException("Either client_id or client_pattern is required.");
+            throw new ArgumentException("A model, client_id, or client_pattern is required.");
         }
 
         if (!string.IsNullOrWhiteSpace(clientPattern))
@@ -1116,6 +1116,132 @@ internal sealed class ManagementStore
         }
     }
 
+    public IReadOnlyList<string> GetClientKeyGroupIds(string clientKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(clientKeyId))
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT g.id FROM groups g
+                INNER JOIN client_key_groups ckg ON g.id = ckg.group_id
+                WHERE ckg.client_key_id = $client_key_id
+                ORDER BY g.name
+                """;
+            command.Parameters.AddWithValue("$client_key_id", clientKeyId);
+
+            var result = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(reader.GetString(0));
+            }
+
+            return result;
+        }
+    }
+
+    public void SetClientKeyGroups(string clientKeyId, IReadOnlyList<string> groupIds)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(clientKeyId))
+        {
+            throw new ArgumentException("Client key id is required.", nameof(clientKeyId));
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var transaction = connection.BeginTransaction();
+
+            try
+            {
+                using (var deleteCommand = connection.CreateCommand())
+                {
+                    deleteCommand.Transaction = transaction;
+                    deleteCommand.CommandText = "DELETE FROM client_key_groups WHERE client_key_id = $client_key_id";
+                    deleteCommand.Parameters.AddWithValue("$client_key_id", clientKeyId);
+                    deleteCommand.ExecuteNonQuery();
+                }
+
+                using (var insertCommand = connection.CreateCommand())
+                {
+                    insertCommand.Transaction = transaction;
+                    insertCommand.CommandText = """
+                        INSERT INTO client_key_groups (client_key_id, group_id)
+                        VALUES ($client_key_id, $group_id)
+                        """;
+
+                    var clientKeyParam = insertCommand.Parameters.Add("$client_key_id", SqliteType.Text);
+                    var groupParam = insertCommand.Parameters.Add("$group_id", SqliteType.Text);
+                    clientKeyParam.Value = clientKeyId;
+
+                    foreach (var groupId in groupIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase))
+                    {
+                        groupParam.Value = groupId;
+                        insertCommand.ExecuteNonQuery();
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+    }
+
+    public IReadOnlyList<ClientKeyGroupInfo> ListClientKeyGroups()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT ck.id, ck.name, ck.key_prefix,
+                    GROUP_CONCAT(g.id) as group_ids,
+                    GROUP_CONCAT(g.name) as group_names
+                FROM client_keys ck
+                LEFT JOIN client_key_groups ckg ON ck.id = ckg.client_key_id
+                LEFT JOIN groups g ON ckg.group_id = g.id
+                GROUP BY ck.id
+                ORDER BY ck.name
+                """;
+
+            var result = new List<ClientKeyGroupInfo>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var keyId = reader.GetString(0);
+                var keyName = reader.GetString(1);
+                var keyPrefix = reader.GetString(2);
+                var groupIds = reader.IsDBNull(3)
+                    ? []
+                    : reader.GetString(3).Split(',', StringSplitOptions.RemoveEmptyEntries);
+                var groupNames = reader.IsDBNull(4)
+                    ? []
+                    : reader.GetString(4).Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+                result.Add(new ClientKeyGroupInfo(keyId, keyName, keyPrefix, groupIds, groupNames));
+            }
+
+            return result;
+        }
+    }
+
     public GroupAccess ResolveGroupAccess(string? userKeyId)
     {
         if (!_isAvailable || string.IsNullOrWhiteSpace(userKeyId))
@@ -1126,75 +1252,102 @@ internal sealed class ManagementStore
         lock (_lock)
         {
             var groupIds = GetUserKeyGroupIdsLocked(userKeyId);
-            if (groupIds.Count == 0)
+            return ResolveGroupAccessFromGroupIdsLocked(groupIds);
+        }
+    }
+
+    public GroupAccess ResolveClientKeyAccess(string clientKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(clientKeyId))
+        {
+            return GroupAccess.Unrestricted;
+        }
+
+        lock (_lock)
+        {
+            var groupIds = GetClientKeyGroupIdsLocked(clientKeyId);
+            return ResolveGroupAccessFromGroupIdsLocked(groupIds);
+        }
+    }
+
+    private GroupAccess ResolveGroupAccessFromGroupIdsLocked(IReadOnlyList<string> groupIds)
+    {
+        if (groupIds.Count == 0)
+        {
+            return GroupAccess.Empty;
+        }
+
+        var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allClients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        var whereClause = string.Join(", ", groupIds.Select((_, index) => $"$group_{index}"));
+        command.CommandText = $"""
+            SELECT gm.client_id, gm.model, gm.client_pattern
+            FROM group_members gm
+            WHERE gm.group_id IN ({whereClause})
+            """;
+        for (var index = 0; index < groupIds.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$group_{index}", groupIds[index]);
+        }
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var clientId = reader.IsDBNull(0) ? null : reader.GetString(0);
+            var model = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var pattern = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+            if (!string.IsNullOrWhiteSpace(pattern))
             {
-                return GroupAccess.Unrestricted;
-            }
-
-            var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var allClients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT gm.client_id, gm.model, gm.client_pattern
-                FROM group_members gm
-                INNER JOIN user_key_groups ukg ON gm.group_id = ukg.group_id
-                WHERE ukg.user_key_id = $user_key_id
-                """;
-            command.Parameters.AddWithValue("$user_key_id", userKeyId);
-
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                var clientId = reader.IsDBNull(0) ? null : reader.GetString(0);
-                var model = reader.IsDBNull(1) ? null : reader.GetString(1);
-                var pattern = reader.IsDBNull(2) ? null : reader.GetString(2);
-
-                if (!string.IsNullOrWhiteSpace(pattern))
+                Regex? regex = null;
+                try
                 {
-                    Regex? regex = null;
-                    try
-                    {
-                        regex = new Regex(
-                            pattern,
-                            RegexOptions.IgnoreCase | RegexOptions.Compiled);
-                    }
-                    catch (RegexParseException)
-                    {
-                        continue;
-                    }
+                    regex = new Regex(
+                        pattern,
+                        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+                }
+                catch (RegexParseException)
+                {
+                    continue;
+                }
 
-                    foreach (var connectedClient in _getConnectedClientIds())
+                foreach (var connectedClient in _getConnectedClientIds())
+                {
+                    if (regex.IsMatch(connectedClient))
                     {
-                        if (regex.IsMatch(connectedClient))
+                        if (!string.IsNullOrWhiteSpace(model))
                         {
-                            if (!string.IsNullOrWhiteSpace(model))
-                            {
-                                clientModels.Add($"{connectedClient}:{model}");
-                            }
-                            else
-                            {
-                                allClients.Add(connectedClient);
-                            }
+                            clientModels.Add($"{connectedClient}:{model}");
+                        }
+                        else
+                        {
+                            allClients.Add(connectedClient);
                         }
                     }
                 }
-                else if (!string.IsNullOrWhiteSpace(clientId))
+            }
+            else if (!string.IsNullOrWhiteSpace(clientId))
+            {
+                if (!string.IsNullOrWhiteSpace(model))
                 {
-                    if (!string.IsNullOrWhiteSpace(model))
-                    {
-                        clientModels.Add($"{clientId}:{model}");
-                    }
-                    else
-                    {
-                        allClients.Add(clientId);
-                    }
+                    clientModels.Add($"{clientId}:{model}");
+                }
+                else
+                {
+                    allClients.Add(clientId);
                 }
             }
-
-            return new GroupAccess(clientModels, allClients);
+            else if (!string.IsNullOrWhiteSpace(model))
+            {
+                allModels.Add(model);
+            }
         }
+
+        return new GroupAccess(clientModels, allClients, allModels);
     }
 
     public IReadOnlyDictionary<string, IReadOnlyList<string>> ResolveClientGroups(IReadOnlyList<string> clientIds)
@@ -1985,6 +2138,23 @@ internal sealed class ManagementStore
         return result;
     }
 
+    private IReadOnlyList<string> GetClientKeyGroupIdsLocked(string clientKeyId)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT group_id FROM client_key_groups WHERE client_key_id = $client_key_id";
+        command.Parameters.AddWithValue("$client_key_id", clientKeyId);
+
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
+    }
+
     private Func<IEnumerable<string>> _getConnectedClientIds = () => [];
 
     public void SetConnectedClientProvider(Func<IEnumerable<string>> provider)
@@ -2089,6 +2259,12 @@ internal sealed class ManagementStore
                     key_prefix TEXT NOT NULL,
                     created_at_utc TEXT NOT NULL,
                     last_used_at_utc TEXT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS client_key_groups (
+                    client_key_id TEXT NOT NULL REFERENCES client_keys(id) ON DELETE CASCADE,
+                    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+                    PRIMARY KEY (client_key_id, group_id)
                 );
                 """;
             command.ExecuteNonQuery();
@@ -2371,9 +2547,9 @@ internal sealed class ManagementStore
         int? parallelismHeadroom)
     {
         return new GroupClientKeepalivePolicy(
-            Math.Max(1, instancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive),
+            Math.Max(0, instancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive),
             Math.Max(1, maxParallelismPerClient ?? GroupClientKeepalivePolicy.Default.MaxParallelismPerClient),
-            Math.Max(1, parallelismHeadroom ?? GroupClientKeepalivePolicy.Default.ParallelismHeadroom));
+            Math.Max(0, parallelismHeadroom ?? GroupClientKeepalivePolicy.Default.ParallelismHeadroom));
     }
 
     private void EnsureAvailable()
@@ -2584,30 +2760,106 @@ internal sealed record UserKeyGroupInfo(
     IReadOnlyList<string> GroupIds,
     IReadOnlyList<string> GroupNames);
 
+internal sealed record ClientKeyGroupInfo(
+    string ClientKeyId,
+    string ClientKeyName,
+    string ClientKeyPrefix,
+    IReadOnlyList<string> GroupIds,
+    IReadOnlyList<string> GroupNames);
+
 internal sealed class GroupAccess
 {
-    public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
+    public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
 
-    public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>());
+    public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>());
 
     public IReadOnlySet<string> ClientModels { get; }
 
     public IReadOnlySet<string> AllClients { get; }
 
+    public IReadOnlySet<string> AllModels { get; }
+
     public bool IsUnrestricted { get; }
 
-    public GroupAccess(IReadOnlySet<string> clientModels, IReadOnlySet<string> allClients, bool isUnrestricted = false)
+    public GroupAccess(
+        IReadOnlySet<string> clientModels,
+        IReadOnlySet<string> allClients,
+        IReadOnlySet<string>? allModels = null,
+        bool isUnrestricted = false)
     {
         ClientModels = clientModels;
         AllClients = allClients;
+        AllModels = allModels ?? new HashSet<string>();
         IsUnrestricted = isUnrestricted;
     }
 
     public bool IsClientAllowed(string clientId) =>
         IsUnrestricted || AllClients.Contains(clientId);
 
-    public bool IsClientModelAllowed(string clientId, string model) =>
-        IsUnrestricted
-        || AllClients.Contains(clientId)
-        || ClientModels.Contains($"{clientId}:{model}");
+    public bool IsClientModelAllowed(string clientId, string model)
+    {
+        if (IsUnrestricted || AllClients.Contains(clientId))
+        {
+            return true;
+        }
+
+        foreach (var selector in AllModels)
+        {
+            if (GroupAccess.ModelSelectorMatches(selector, model))
+            {
+                return true;
+            }
+        }
+
+        foreach (var key in ClientModels)
+        {
+            var separator = key.IndexOf(':');
+            if (separator <= 0
+                || !string.Equals(key[..separator], clientId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (GroupAccess.ModelSelectorMatches(key[(separator + 1)..], model))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool ModelSelectorMatches(string selector, string model)
+    {
+        if (string.IsNullOrWhiteSpace(selector) || string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        var trimmedSelector = selector.Trim();
+        var trimmedModel = model.Trim();
+        if (string.Equals(trimmedSelector, trimmedModel, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(StripLatestTag(trimmedSelector), StripLatestTag(trimmedModel), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            return Regex.IsMatch(trimmedModel, trimmedSelector, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string StripLatestTag(string model) =>
+        model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
+            ? model[..^":latest".Length]
+            : model;
 }
