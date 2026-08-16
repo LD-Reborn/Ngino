@@ -477,7 +477,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         return null;
     }
 
-    private string[] BuildDockerRunArgs(string containerName, LlamaCppModel model, int port)
+    internal string[] BuildDockerRunArgs(string containerName, LlamaCppModel model, int port)
     {
         var blobsDir = Path.GetDirectoryName(Path.GetFullPath(model.BlobPath))!;
         var blobFile = Path.GetFileName(model.BlobPath);
@@ -499,7 +499,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             args.Add("--group-add=video");
         }
 
-        if (HasNvidiaGpu() && !HasRocmDevices())
+        if ((HasNvidiaGpu() || IsCudaDockerImage(_dockerImage)) && !HasRocmDevices())
         {
             args.Add("--gpus=all");
         }
@@ -827,14 +827,36 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
     {
         try
         {
-            return File.Exists("/proc/driver/nvidia/version")
-                || Directory.Exists("/proc/driver/nvidia/gpus");
+            if (File.Exists("/proc/driver/nvidia/version")
+                || Directory.Exists("/proc/driver/nvidia/gpus"))
+            {
+                return true;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                return false;
+            }
+
+            var systemNvidiaSmi = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "nvidia-smi.exe");
+            var programFilesNvidiaSmi = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "NVIDIA Corporation",
+                "NVSMI",
+                "nvidia-smi.exe");
+
+            return File.Exists(systemNvidiaSmi) || File.Exists(programFilesNvidiaSmi);
         }
         catch
         {
             return false;
         }
     }
+
+    private static bool IsCudaDockerImage(string image) =>
+        image.Contains("cuda", StringComparison.OrdinalIgnoreCase);
 
     [GeneratedRegex(@"[^a-zA-Z0-9_.-]")]
     private static partial Regex InvalidContainerNameChars();
