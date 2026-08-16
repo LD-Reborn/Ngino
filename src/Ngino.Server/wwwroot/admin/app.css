@@ -205,6 +205,62 @@ textarea {
   line-height: 1.45;
 }
 
+.help-popover.in-table {
+  position: absolute;
+  z-index: 50;
+  margin-top: 6px;
+  max-width: 280px;
+}
+
+.warn-button {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--amber);
+  border-radius: 999px;
+  background: #fff8e5;
+  color: var(--amber);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0;
+}
+
+.warn-button:hover,
+.warn-button.active {
+  background: var(--amber);
+  color: #ffffff;
+}
+
+.table-wrap td,
+.table-wrap th {
+  position: relative;
+}
+
+.key-group-list {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.key-group-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.key-group-item:hover {
+  border-color: var(--blue);
+  background: #edf4ff;
+}
+
 .input,
 .select,
 .textarea {
@@ -345,6 +401,11 @@ tr:last-child td {
 .cell-main {
   font-weight: 800;
   overflow-wrap: anywhere;
+}
+
+.cell-main .warn-button {
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 .cell-sub {

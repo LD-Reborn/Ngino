@@ -111,9 +111,13 @@ internal sealed class TunnelHub
             })
             .ToList();
 
-    public async Task AcceptAsync(string clientId, WebSocket socket, CancellationToken cancellationToken)
+    public async Task AcceptAsync(
+        string clientId,
+        WebSocket socket,
+        CancellationToken cancellationToken,
+        Func<GroupAccess?>? accessProvider = null)
     {
-        var connection = new TunnelConnection(clientId, socket, _loggerFactory.CreateLogger<TunnelConnection>());
+        var connection = new TunnelConnection(clientId, socket, _loggerFactory.CreateLogger<TunnelConnection>(), accessProvider);
 
         TunnelConnection? previous = null;
         _connections.AddOrUpdate(

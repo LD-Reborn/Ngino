@@ -108,18 +108,6 @@ internal sealed class KeepaliveService : BackgroundService
             return false;
         }
 
-        var requested = requestedModel.Trim();
-        return models.Any(model => ModelNamesMatch(requested, model));
+        return models.Any(model => GroupAccess.ModelSelectorMatches(requestedModel, model));
     }
-
-    private static bool ModelNamesMatch(string requested, string available)
-    {
-        return string.Equals(requested, available, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(StripLatestTag(requested), StripLatestTag(available), StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string StripLatestTag(string model) =>
-        model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
-            ? model[..^":latest".Length]
-            : model;
 }

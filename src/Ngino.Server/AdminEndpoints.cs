@@ -311,6 +311,28 @@ internal static class AdminEndpoints
                 ? Results.NoContent()
                 : Results.NotFound(new { error = $"Client key '{id}' was not found." }));
 
+        api.MapGet("/client-keys/groups", (ManagementStore store) =>
+            Results.Json(store.ListClientKeyGroups()));
+
+        api.MapPut("/client-keys/{id}/groups", (string id, SetClientKeyGroupsRequest request, ManagementStore store) =>
+        {
+            var keys = store.ListClientKeys();
+            if (!keys.Any(k => k.Id == id))
+            {
+                return Results.NotFound(new { error = $"Client key '{id}' was not found." });
+            }
+
+            try
+            {
+                store.SetClientKeyGroups(id, request.GroupIds ?? []);
+                return Results.Ok(new { clientKeyId = id, groupIds = store.GetClientKeyGroupIds(id) });
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
         api.MapGet("/groups", (ManagementStore store) =>
             Results.Json(store.ListGroups()));
 
@@ -645,6 +667,7 @@ internal static class AdminEndpoints
             clientKeys = store.ListClientKeys(),
             groups = store.ListGroups(),
             userKeyGroups = store.ListUserKeyGroups(),
+            clientKeyGroups = store.ListClientKeyGroups(),
             clientGroups = store.ResolveClientGroups(
                 hub.ClientSnapshots.Select(c => c.Id).ToList())
         };
@@ -908,6 +931,8 @@ internal sealed record AddGroupClientRequest(
     int? KeepaliveParallelismHeadroom);
 
 internal sealed record SetUserKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
+
+internal sealed record SetClientKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
 
 internal sealed record UpdateBillingRequest(
     string? Currency,
