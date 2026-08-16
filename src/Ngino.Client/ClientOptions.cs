@@ -16,8 +16,6 @@ internal sealed class ClientOptions
 
     public TimeSpan ReconnectDelay { get; init; } = TimeSpan.FromSeconds(5);
 
-    public int ChunkSize { get; init; } = 64 * 1024;
-
     public bool InsecureSkipTlsVerify { get; init; }
 
     public bool UseLlamaCppViaDocker { get; init; }
@@ -69,7 +67,6 @@ internal sealed class ClientOptions
             Token = Read(values, "token", "NGINO_TOKEN"),
             ClientId = Read(values, "client-id", "NGINO_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
             ReconnectDelay = TimeSpan.FromSeconds(ReadInt(values, 5, "reconnect-delay", "NGINO_RECONNECT_DELAY_SECONDS")),
-            ChunkSize = ReadInt(values, 64 * 1024, "chunk-size", "NGINO_CHUNK_SIZE"),
             InsecureSkipTlsVerify = ReadBool(values, false, "insecure-skip-tls-verify", "NGINO_INSECURE_SKIP_TLS_VERIFY"),
             UseLlamaCppViaDocker = ReadBool(values, false, "use-llama-cpp-via-docker", "NGINO_USE_LLAMA_CPP_VIA_DOCKER"),
             UseOllamaModelsPath = NormalizeDirectoryPath(Read(values, "use-ollama-models-path", "NGINO_USE_OLLAMA_MODELS_PATH")),
@@ -90,7 +87,6 @@ internal sealed class ClientOptions
           --client-id <name>             Identifies this machine on the server; defaults to the machine name
           --tunnel-path <path>           Defaults to /_ngino/tunnel
           --reconnect-delay <sec>        Defaults to 5
-          --chunk-size <bytes>           Defaults to 65536
           --insecure-skip-tls-verify     Disable server TLS certificate validation (unsafe)
           --use-llama-cpp-via-docker     Use llama.cpp via Docker for inference instead of Ollama
           --use-ollama-models-path <dir> Path to Ollama models directory (manifests/blobs), required with --use-llama-cpp-via-docker

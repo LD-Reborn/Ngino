@@ -272,7 +272,7 @@ internal sealed class UpstreamRequest
     private async Task SendResponseBodyAsync(HttpResponseMessage response)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(_cancellationTokenSource.Token);
-        var buffer = new byte[_upstream switch { _ => 64 * 1024 }];
+        var buffer = new byte[64 * 1024];
 
         while (true)
         {
