@@ -109,29 +109,8 @@ internal sealed class AuthRateLimiter
         }
     }
 
-    public static string GetClientIp(HttpRequest request)
-    {
-        if (request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor))
-        {
-            var first = forwardedFor.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(first))
-            {
-                var commaIndex = first.IndexOf(',');
-                return commaIndex > 0 ? first[..commaIndex].Trim() : first.Trim();
-            }
-        }
-
-        if (request.Headers.TryGetValue("X-Real-IP", out var realIp))
-        {
-            var first = realIp.FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(first))
-            {
-                return first.Trim();
-            }
-        }
-
-        return request.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-    }
+    public static string GetClientIp(HttpRequest request) =>
+        request.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
     private static TimeSpan? CalculateWaitTime(int attemptCount) =>
         attemptCount switch

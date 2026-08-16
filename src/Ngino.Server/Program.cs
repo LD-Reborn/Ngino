@@ -1,10 +1,14 @@
 using System.Data.SqlClient;
+using System.Net;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using ElmahCore;
 using ElmahCore.Mvc;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using IPNetwork = System.Net.IPNetwork;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Ngino.Protocol;
@@ -155,6 +159,21 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+var forwardedHeadersOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor
+};
+foreach (var proxy in ParseIpAddresses(settings.ForwardedHeaders.KnownProxies))
+{
+    forwardedHeadersOptions.KnownProxies.Add(proxy);
+}
+foreach (var network in ParseNetworks(settings.ForwardedHeaders.KnownNetworks))
+{
+    forwardedHeadersOptions.KnownIPNetworks.Add(network);
+}
+
+app.UseForwardedHeaders(forwardedHeadersOptions);
 
 var managementStore = app.Services.GetRequiredService<ManagementStore>();
 var tunnelHub = app.Services.GetRequiredService<TunnelHub>();
@@ -348,4 +367,31 @@ catch (Exception exception)
 {
     elmahService.Log(new Error(exception));
     throw;
+}
+
+static List<IPAddress> ParseIpAddresses(string[] entries) =>
+    entries.Where(e => IPAddress.TryParse(e, out _)).Select(IPAddress.Parse).ToList();
+
+static List<IPNetwork> ParseNetworks(string[] entries)
+{
+    var networks = new List<IPNetwork>();
+
+    foreach (var entry in entries)
+    {
+        var slash = entry.IndexOf('/');
+        if (slash > 0
+            && int.TryParse(entry[(slash + 1)..], out var prefixLength)
+            && IPAddress.TryParse(entry[..slash], out var networkAddress)
+            && prefixLength >= 0
+            && prefixLength <= (networkAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128))
+        {
+            networks.Add(new IPNetwork(networkAddress, prefixLength));
+        }
+        else if (IPAddress.TryParse(entry, out var host))
+        {
+            networks.Add(new IPNetwork(host, host.AddressFamily == AddressFamily.InterNetwork ? 32 : 128));
+        }
+    }
+
+    return networks;
 }
