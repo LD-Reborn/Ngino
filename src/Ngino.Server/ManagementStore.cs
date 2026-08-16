@@ -913,9 +913,9 @@ internal sealed class ManagementStore
             throw new ArgumentException("Group id is required.", nameof(groupId));
         }
 
-        if (string.IsNullOrWhiteSpace(clientId) && string.IsNullOrWhiteSpace(clientPattern))
+        if (string.IsNullOrWhiteSpace(clientId) && string.IsNullOrWhiteSpace(clientPattern) && string.IsNullOrWhiteSpace(model))
         {
-            throw new ArgumentException("Either client_id or client_pattern is required.");
+            throw new ArgumentException("A model, client_id, or client_pattern is required.");
         }
 
         if (!string.IsNullOrWhiteSpace(clientPattern))
@@ -1279,6 +1279,7 @@ internal sealed class ManagementStore
 
         var clientModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var allClients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var allModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
@@ -1340,9 +1341,13 @@ internal sealed class ManagementStore
                     allClients.Add(clientId);
                 }
             }
+            else if (!string.IsNullOrWhiteSpace(model))
+            {
+                allModels.Add(model);
+            }
         }
 
-        return new GroupAccess(clientModels, allClients);
+        return new GroupAccess(clientModels, allClients, allModels);
     }
 
     public IReadOnlyDictionary<string, IReadOnlyList<string>> ResolveClientGroups(IReadOnlyList<string> clientIds)
@@ -2542,9 +2547,9 @@ internal sealed class ManagementStore
         int? parallelismHeadroom)
     {
         return new GroupClientKeepalivePolicy(
-            Math.Max(1, instancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive),
+            Math.Max(0, instancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive),
             Math.Max(1, maxParallelismPerClient ?? GroupClientKeepalivePolicy.Default.MaxParallelismPerClient),
-            Math.Max(1, parallelismHeadroom ?? GroupClientKeepalivePolicy.Default.ParallelismHeadroom));
+            Math.Max(0, parallelismHeadroom ?? GroupClientKeepalivePolicy.Default.ParallelismHeadroom));
     }
 
     private void EnsureAvailable()
@@ -2764,28 +2769,97 @@ internal sealed record ClientKeyGroupInfo(
 
 internal sealed class GroupAccess
 {
-    public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
+    public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
 
-    public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>());
+    public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>());
 
     public IReadOnlySet<string> ClientModels { get; }
 
     public IReadOnlySet<string> AllClients { get; }
 
+    public IReadOnlySet<string> AllModels { get; }
+
     public bool IsUnrestricted { get; }
 
-    public GroupAccess(IReadOnlySet<string> clientModels, IReadOnlySet<string> allClients, bool isUnrestricted = false)
+    public GroupAccess(
+        IReadOnlySet<string> clientModels,
+        IReadOnlySet<string> allClients,
+        IReadOnlySet<string>? allModels = null,
+        bool isUnrestricted = false)
     {
         ClientModels = clientModels;
         AllClients = allClients;
+        AllModels = allModels ?? new HashSet<string>();
         IsUnrestricted = isUnrestricted;
     }
 
     public bool IsClientAllowed(string clientId) =>
         IsUnrestricted || AllClients.Contains(clientId);
 
-    public bool IsClientModelAllowed(string clientId, string model) =>
-        IsUnrestricted
-        || AllClients.Contains(clientId)
-        || ClientModels.Contains($"{clientId}:{model}");
+    public bool IsClientModelAllowed(string clientId, string model)
+    {
+        if (IsUnrestricted || AllClients.Contains(clientId))
+        {
+            return true;
+        }
+
+        foreach (var selector in AllModels)
+        {
+            if (GroupAccess.ModelSelectorMatches(selector, model))
+            {
+                return true;
+            }
+        }
+
+        foreach (var key in ClientModels)
+        {
+            var separator = key.IndexOf(':');
+            if (separator <= 0
+                || !string.Equals(key[..separator], clientId, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (GroupAccess.ModelSelectorMatches(key[(separator + 1)..], model))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool ModelSelectorMatches(string selector, string model)
+    {
+        if (string.IsNullOrWhiteSpace(selector) || string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        var trimmedSelector = selector.Trim();
+        var trimmedModel = model.Trim();
+        if (string.Equals(trimmedSelector, trimmedModel, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(StripLatestTag(trimmedSelector), StripLatestTag(trimmedModel), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            return Regex.IsMatch(trimmedModel, trimmedSelector, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string StripLatestTag(string model) =>
+        model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)
+            ? model[..^":latest".Length]
+            : model;
 }
