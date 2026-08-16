@@ -25,6 +25,8 @@ internal sealed class ServerSettings
 
     public CorsSettings Cors { get; init; } = new();
 
+    public ForwardedHeadersSettings ForwardedHeaders { get; init; } = new();
+
     public static ServerSettings FromConfiguration(IConfiguration configuration)
     {
         return new ServerSettings
@@ -62,6 +64,11 @@ internal sealed class ServerSettings
                 AllowedMethods = ReadStringArray(configuration, ["CORS:AllowedMethods"]),
                 AllowedHeaders = ReadStringArray(configuration, ["CORS:AllowedHeaders"]),
                 AllowCredentials = ReadBool(configuration, false, "CORS:AllowCredentials")
+            },
+            ForwardedHeaders = new ForwardedHeadersSettings
+            {
+                KnownProxies = ReadStringArray(configuration, ["ForwardedHeaders:KnownProxies"]),
+                KnownNetworks = ReadStringArray(configuration, ["ForwardedHeaders:KnownNetworks"])
             }
         };
     }
@@ -123,6 +130,13 @@ internal sealed class CorsSettings
     public string[] AllowedHeaders { get; init; } = ["*"];
 
     public bool AllowCredentials { get; init; }
+}
+
+internal sealed class ForwardedHeadersSettings
+{
+    public string[] KnownProxies { get; init; } = [];
+
+    public string[] KnownNetworks { get; init; } = [];
 }
 
 internal sealed class KeycloakSettings
