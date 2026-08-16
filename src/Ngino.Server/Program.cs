@@ -96,7 +96,7 @@ if (!settings.Keycloak.IsConfigured)
             options.Password.RequireUppercase = true;
             options.Password.RequireNonAlphanumeric = false;
             options.Password.RequiredLength = 8;
-            options.User.RequireUniqueEmail = true;
+            options.User.RequireUniqueEmail = false;
             options.SignIn.RequireConfirmedAccount = false;
         })
         .AddEntityFrameworkStores<ApplicationDbContext>()
