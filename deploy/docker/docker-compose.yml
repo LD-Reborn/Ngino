@@ -7,6 +7,7 @@ services:
     environment:
       - ASPNETCORE_URLS=http://+:8080
       - NGINO_TOKEN=${NGINO_TOKEN:-change-me}
+      - NGINO_CLIENT_TOKEN=${NGINO_CLIENT_TOKEN:-}
       - NGINO_CHUNK_SIZE=${NGINO_CHUNK_SIZE:-65536}
       - NGINO_SECURE_COOKIES=${NGINO_SECURE_COOKIES:-true}
       - ConnectionStrings__ElmahConnection=Server=${MYSQL_HOST:-mysql};Port=${MYSQL_PORT:-3306};Database=${MYSQL_DATABASE:-elmah};User Id=${MYSQL_USER:-elmah};Password=${MYSQL_PASSWORD:-elmah};

@@ -327,7 +327,7 @@ app.Map(settings.TunnelPath, async (HttpContext context, TunnelHub hub, ServerSe
     if (!clientAuth.IsAuthorized)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsync($"Missing or invalid {ProtocolConstants.TokenHeader}.", context.RequestAborted);
+        await context.Response.WriteAsync(TokenAuthentication.MissingTokenMessage, context.RequestAborted);
         return;
     }
 

@@ -134,7 +134,7 @@ internal sealed class EmbeddingCache
         CancellationToken cancellationToken)
     {
         if (!_isAvailable
-            || responseHeaders.StatusCode is not >= 200 or >= 300
+            || responseHeaders.StatusCode is < 200 or >= 300
             || HasContentEncoding(responseHeaders)
             || body.Length == 0)
         {

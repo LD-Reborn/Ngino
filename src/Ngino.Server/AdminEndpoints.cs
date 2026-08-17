@@ -135,15 +135,7 @@ internal static class AdminEndpoints
             .AllowAnonymous();
 
         var api = app.MapGroup("/api/admin");
-
-        if (settings.Keycloak.IsConfigured)
-        {
-            api.RequireAuthorization();
-        }
-        else
-        {
-            api.RequireAuthorization();
-        }
+        api.RequireAuthorization();
 
         api.MapGet("/summary", (HttpContext context, TunnelHub hub, ManagementStore store) =>
             Results.Json(BuildSummary(context.User, hub, store, settings)));
@@ -600,16 +592,8 @@ internal static class AdminEndpoints
         var adminAssets = app.MapGet("/admin/{**assetPath}", (IWebHostEnvironment environment, string? assetPath) =>
             ServeAdminAsset(environment, assetPath));
 
-        if (settings.Keycloak.IsConfigured)
-        {
-            adminHome.RequireAuthorization();
-            adminAssets.RequireAuthorization();
-        }
-        else
-        {
-            adminHome.RequireAuthorization();
-            adminAssets.RequireAuthorization();
-        }
+        adminHome.RequireAuthorization();
+        adminAssets.RequireAuthorization();
     }
 
     private static string LoginPage(string returnUrl, string? error, string? antiforgeryToken)

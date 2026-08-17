@@ -18,7 +18,10 @@ param(
     [switch]$UseLlamaCppViaDocker,
     [string]$UseOllamaModelsPath = "",
     [string]$LlamaCppDockerImage = "",
-    [int]$LlamaCppBasePort = 0
+    [int]$LlamaCppBasePort = 0,
+    [int]$LlamaCppParallel = 0,
+    [int]$LlamaCppFallbackCooldown = 0,
+    [string]$LogDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -172,6 +175,15 @@ if ($UseLlamaCppViaDocker) {
     if ($LlamaCppBasePort -gt 0) {
         $serviceEnvironment += "NGINO_LLAMA_CPP_BASE_PORT=$LlamaCppBasePort"
     }
+    if ($LlamaCppParallel -gt 0) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_PARALLEL=$LlamaCppParallel"
+    }
+    if ($LlamaCppFallbackCooldown -gt 0) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS=$LlamaCppFallbackCooldown"
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($LogDir)) {
+    $serviceEnvironment += "NGINO_LOG_DIR=$LogDir"
 }
 if ($InsecureSkipTlsVerify) {
     Write-Warn "Server TLS certificate validation is disabled for $ServiceName."
