@@ -24,9 +24,7 @@ The server provides
   - What models are running
   - How many requests is each client processing
   - How many requests has each client processed
-- Group management (planned)
-  - Who can access which models
-  - What clients are mapped to which groups
+- Group management (who can access which clients and models)
 - Billing (planned)
   - (planned) Price per model per thousand tokens
   - (planned) Usage per user key
@@ -55,7 +53,7 @@ Start the server:
 dotnet run --project src/Ngino.Server --urls http://0.0.0.0:5050
 ```
 
-Open `http://your-server:5050/admin`, log in, and create a **user key** (for API access) and a **client key** (for the tunnel client). Make sure to write them down, as they are only shown once each.
+Open `http://your-server:5050/admin`. On first start (when Keycloak is not configured) you are taken to `/admin/setup` to create the initial admin account; afterwards you log in on `/admin/login` and create a **user key** (for API access) and a **client key** (for the tunnel client). Make sure to write them down, as they are only shown once each.
 
 Start the client on the GPU workstation, passing the client key as the token:
 
@@ -94,8 +92,8 @@ Server options:
 
 Admin UI:
 
-- `GET /admin` opens the Keycloak-protected management UI.
-- The temporary Keycloak settings live under `Authentication:Keycloak` in `appsettings.json`.
+- `GET /admin` opens the management UI. By default (no Keycloak configured) the server runs its own local admin login backed by an SQLite identity database: the first visit redirects to `/admin/setup` to create the initial admin account, and `/admin/login` afterwards accepts username/password. When the Keycloak settings are configured, `/admin` redirects to Keycloak for sign-in instead and `/admin/setup` is not used.
+- The optional Keycloak settings live under `Authentication:Keycloak` in `appsettings.json` (see `appsettings.Example.json`).
 - User keys created in the UI are accepted on the proxy endpoints via `X-Ngino-Token`, `Authorization: Bearer <key>`, or the `/token/<key>/...` path prefix. Query-string auth (`?token=...`) is only accepted on the status and tunnel endpoints.
 - Client keys created in the UI authorize tunnel connections on the tunnel endpoint. Pass the key to the client via its `--token`/`NGINO_TOKEN`. Client keys are only accepted on the tunnel endpoint, and user keys are only accepted on the proxy endpoints.
 - Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`).

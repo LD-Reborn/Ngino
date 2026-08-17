@@ -23,6 +23,7 @@ LLAMA_CPP_BASE_PORT=""
 LLAMA_CPP_PARALLEL=""
 LLAMA_CPP_FALLBACK_COOLDOWN=""
 LOG_DIR=""
+SKIP_TLS_VERIFY=false
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -65,6 +66,8 @@ Optional:
   --llama-cpp-fallback-cooldown <sec>
                        Seconds before llama.cpp is retried after a failed container start; defaults to 180
   --log-dir <dir>      Directory for log files; defaults to <install-dir>/Logs
+  --insecure-skip-tls-verify
+                       Disable server TLS certificate validation (unsafe)
   -h, --help           Show this help message
 
 Examples:
@@ -94,6 +97,7 @@ while [[ $# -gt 0 ]]; do
         --llama-cpp-parallel)       LLAMA_CPP_PARALLEL="$2"; shift 2 ;;
         --llama-cpp-fallback-cooldown) LLAMA_CPP_FALLBACK_COOLDOWN="$2"; shift 2 ;;
         --log-dir)                  LOG_DIR="$2"; shift 2 ;;
+        --insecure-skip-tls-verify) SKIP_TLS_VERIFY=true; shift ;;
         -h|--help)                  usage ;;
         *)                          die "Unknown option: $1" ;;
     esac
@@ -312,6 +316,9 @@ ENV_DIR="/etc/ngino-client"
 mkdir -p "$ENV_DIR"
 {
     printf 'NGINO_TOKEN=%s\n' "$TOKEN"
+    if [[ "$SKIP_TLS_VERIFY" == "true" ]]; then
+        printf 'NGINO_INSECURE_SKIP_TLS_VERIFY=true\n'
+    fi
     if [[ "$USE_LLAMA_CPP_VIA_DOCKER" == "true" ]]; then
         printf 'NGINO_USE_LLAMA_CPP_VIA_DOCKER=true\n'
         if [[ -n "$USE_OLLAMA_MODELS_PATH" ]]; then
@@ -336,6 +343,10 @@ mkdir -p "$ENV_DIR"
 } > "$ENV_DIR/env"
 chmod 600 "$ENV_DIR/env"
 info "Environment file written to $ENV_DIR/env (mode 0600)."
+
+if [[ "$SKIP_TLS_VERIFY" == "true" ]]; then
+    warn "Server TLS certificate validation is disabled for $SERVICE_NAME."
+fi
 
 # ── Create systemd service ───────────────────────────────────────────────────
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"

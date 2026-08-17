@@ -8,6 +8,8 @@ internal static class TokenAuthentication
 {
     private static readonly PathString PathTokenPrefix = new("/token");
 
+    internal const string MissingTokenMessage = $"Missing or invalid {ProtocolConstants.TokenHeader}.";
+
     public static AuthResult Authorize(
         HttpRequest request,
         ServerSettings settings,
