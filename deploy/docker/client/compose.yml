@@ -1,0 +1,50 @@
+services:
+  ngino-client:
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/client/Dockerfile
+    image: git.ld50.dev/ngino/ngino-client:latest
+    container_name: ngino-client
+    # The client reaches the llama.cpp containers it spawns via
+    # localhost:<port> and the Ollama fallback via localhost:11434, both of
+    # which publish on the host. Host networking is therefore required.
+    network_mode: host
+    environment:
+      - NGINO_SERVER=${NGINO_SERVER:?Set NGINO_SERVER in .env}
+      - NGINO_TOKEN=${NGINO_TOKEN:?Set NGINO_TOKEN (client key) in .env}
+      - NGINO_CLIENT_ID=${NGINO_CLIENT_ID:-ngino-docker-client}
+      - NGINO_UPSTREAM=${NGINO_UPSTREAM:-http://localhost:11434}
+      - NGINO_USE_LLAMA_CPP_VIA_DOCKER=${NGINO_USE_LLAMA_CPP_VIA_DOCKER:-false}
+      - NGINO_USE_OLLAMA_MODELS_PATH=${NGINO_USE_OLLAMA_MODELS_PATH:-/usr/share/ollama/.ollama/models}
+      - NGINO_LLAMA_CPP_DOCKER_IMAGE=${NGINO_LLAMA_CPP_DOCKER_IMAGE:-}
+      - NGINO_LLAMA_CPP_BASE_PORT=${NGINO_LLAMA_CPP_BASE_PORT:-8081}
+      - NGINO_LLAMA_CPP_PARALLEL=${NGINO_LLAMA_CPP_PARALLEL:-}
+      - NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS=${NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS:-180}
+    volumes:
+      # Lets the client spawn llama.cpp sibling containers on the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mounted at the identical host path on purpose: the client passes this
+      # path to `docker run -v`, which the daemon resolves against the HOST
+      # filesystem. It must exist at the same absolute path inside and outside
+      # the container.
+      - type: bind
+        source: ${NGINO_USE_OLLAMA_MODELS_PATH:-/usr/share/ollama/.ollama/models}
+        target: ${NGINO_USE_OLLAMA_MODELS_PATH:-/usr/share/ollama/.ollama/models}
+        read_only: true
+        bind:
+          create_host_path: false
+      - ngino-client-logs:/app/Logs
+    # AMD ROCm: uncomment so the client detects the GPU and spawns llama.cpp
+    # containers with ROCm support (--device=/dev/kfd /dev/dri --group-add=video).
+    # devices:
+    #   - /dev/kfd:/dev/kfd
+    #   - /dev/dri:/dev/dri
+    #
+    # NVIDIA: no mounts needed; detection happens inside the spawned
+    # containers. Set NGINO_LLAMA_CPP_DOCKER_IMAGE to a CUDA image in .env so
+    # `--gpus=all` is added to every spawned container.
+    restart: unless-stopped
+
+volumes:
+  ngino-client-logs:
+    driver: local

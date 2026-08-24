@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Ngino.Protocol;
 
@@ -395,6 +396,15 @@ internal sealed class OllamaToLlamaCppTranslator
         var body = await httpResponse.Content.ReadAsByteArrayAsync(cancellationToken);
         byte[] translatedBody;
 
+        // Newer llama.cpp builds stream /completion and /v1/chat/completions as
+        // SSE even though the upstream request itself asked for "stream": true.
+        // Non-streaming Ollama requests must aggregate those chunks into a
+        // single JSON object before translation.
+        if (IsServerSentEventsBody(body))
+        {
+            body = AggregateServerSentEvents(path, body);
+        }
+
         try
         {
             translatedBody = path switch
@@ -495,6 +505,101 @@ internal sealed class OllamaToLlamaCppTranslator
             Type = TunnelMessageTypes.HttpResponseComplete,
             RequestId = requestId
         }, cancellationToken);
+    }
+
+    private static bool IsServerSentEventsBody(byte[] body)
+    {
+        if (body.Length < 6)
+        {
+            return false;
+        }
+
+        var prefix = Encoding.UTF8.GetString(body, 0, Math.Min(body.Length, 16));
+        return prefix.TrimStart().StartsWith("data:", StringComparison.Ordinal);
+    }
+
+    private static byte[] AggregateServerSentEvents(string path, byte[] body)
+    {
+        var content = new StringBuilder();
+        JsonObject? last = null;
+        JsonObject? usage = null;
+
+        foreach (var rawLine in Encoding.UTF8.GetString(body).Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var json = line["data:".Length..].Trim();
+            if (json.Length == 0 || json == "[DONE]")
+            {
+                continue;
+            }
+
+            if (JsonNode.Parse(json) is not JsonObject chunk)
+            {
+                continue;
+            }
+
+            last = chunk;
+
+            if (chunk["usage"] is JsonObject chunkUsage && chunkUsage.Count > 0)
+            {
+                usage = chunkUsage;
+            }
+
+            if (path == "/api/generate")
+            {
+                content.Append(chunk["content"]?.GetValue<string>() ?? "");
+                continue;
+            }
+
+            if (chunk["choices"] is not JsonArray choices
+                || choices.Count == 0
+                || choices[0] is not JsonObject choice
+                || choice["delta"] is not JsonObject delta)
+            {
+                continue;
+            }
+
+            content.Append(delta["content"]?.GetValue<string>() ?? "");
+        }
+
+        if (last is null)
+        {
+            return body;
+        }
+
+        if (path != "/api/generate")
+        {
+            // Chat chunks carry deltas; rebuild the single OpenAI-style object
+            // that TranslateNonStreamingChat expects.
+            var aggregated = new JsonObject
+            {
+                ["choices"] = new JsonArray(new JsonObject
+                {
+                    ["message"] = new JsonObject
+                    {
+                        ["role"] = "assistant",
+                        ["content"] = content.ToString()
+                    }
+                })
+            };
+
+            if (usage is not null)
+            {
+                aggregated["usage"] = usage.DeepClone();
+            }
+
+            return JsonSerializer.SerializeToUtf8Bytes(aggregated, JsonOptions);
+        }
+
+        // The final completion chunk already carries "stop" and "timings";
+        // only the concatenated text needs to be filled in.
+        last["content"] = content.ToString();
+        return JsonSerializer.SerializeToUtf8Bytes(last, JsonOptions);
     }
 
     private byte[] TranslateNonStreamingGenerate(byte[] body)

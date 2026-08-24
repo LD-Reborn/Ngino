@@ -1,12 +1,15 @@
 # Ngino Docker Deployment
 
-This directory contains Docker configuration files for deploying the Ngino server.
+This directory contains Docker configuration files for deploying the Ngino server and client.
 
 ## Files
 
 - `server/Dockerfile` - Build configuration for the Ngino server
 - `docker-compose.yml` - Docker Compose configuration with MySQL for Elmah error logging
 - `.env.example` - Example environment variables (copy to `.env` and customize)
+- `client/Dockerfile` - Build configuration for the Ngino tunnel client
+- `client/compose.yml` - Docker Compose configuration for the client
+- `client/.env.example` - Example environment variables for the client (copy to `.env` and customize)
 
 A pre-built server image is available at `git.ld50.dev/ngino/ngino-server:latest`.
 
@@ -55,6 +58,34 @@ For production, you should:
 - User: `elmah`
 - Data volume: `mysql-data`
 
+## Client in Docker
+
+The client container runs on the GPU workstation and spawns llama.cpp sibling containers through the host Docker daemon (`/var/run/docker.sock`). It uses host networking so it can reach those containers and the local Ollama fallback on `localhost`.
+
+1. Copy the client env example and customize:
+
+```bash
+cd deploy/docker/client
+cp .env.example .env
+nano .env   # set NGINO_SERVER, NGINO_TOKEN, NGINO_USE_OLLAMA_MODELS_PATH, ...
+```
+
+2. For AMD ROCm, uncomment the `devices` block in `compose.yml` (so the client detects the GPU and picks the ROCm image). For NVIDIA, set `NGINO_LLAMA_CPP_DOCKER_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda` in `.env`.
+
+3. Build and start:
+
+```bash
+docker compose up -d --build
+docker compose logs -f ngino-client
+```
+
+Notes:
+
+- The Ollama models directory is mounted read-only at its **identical host path** inside the container. This is required because the client passes that path to sibling `docker run -v` calls, which are resolved by the host daemon against the host filesystem.
+- The client must run as root inside the container to access the Docker socket.
+- Stopping the container leaves already-spawned llama.cpp containers running; a restarted client reuses them. Remove them with `docker ps -q --filter label=ngino-llamacpp | xargs docker rm -f`.
+- Models whose GGUF blob cannot be served by llama.cpp automatically fall back to `NGINO_UPSTREAM` (Ollama), same as the native client.
+
 ## Building the Server Image
 
 To build the server image from source:
@@ -62,6 +93,15 @@ To build the server image from source:
 ```bash
 docker build -t git.ld50.dev/ngino/ngino-server:latest \
   --file deploy/docker/server/Dockerfile .
+```
+
+## Building the Client Image
+
+To build the client image from source:
+
+```bash
+docker build -t git.ld50.dev/ngino/ngino-client:latest \
+  --file deploy/docker/client/Dockerfile .
 ```
 
 ## SSL/TLS Setup
