@@ -57,8 +57,8 @@ internal sealed class KeepaliveService : BackgroundService
             var matchingCandidates = snapshots
                 .Select(snapshot => new KeepaliveCandidate(
                     snapshot.Id,
-                    HasModel(snapshot.Models, member.Model),
-                    HasModel(snapshot.ActiveModels, member.Model)))
+                    MatchSelector(snapshot.Models, member.Model),
+                    MatchSelector(snapshot.ActiveModels, member.Model)))
                 .ToList();
 
             var actions = KeepaliveCoordinator.PlanActions([member], matchingCandidates);
@@ -101,13 +101,6 @@ internal sealed class KeepaliveService : BackgroundService
         }
     }
 
-    private static bool HasModel(IEnumerable<string> models, string requestedModel)
-    {
-        if (string.IsNullOrWhiteSpace(requestedModel))
-        {
-            return false;
-        }
-
-        return models.Any(model => GroupAccess.ModelSelectorMatches(requestedModel, model));
-    }
+    private static string? MatchSelector(IEnumerable<string> models, string selector) =>
+        models.FirstOrDefault(model => GroupAccess.ModelSelectorMatches(selector, model));
 }

@@ -691,6 +691,35 @@ internal sealed class TunnelClient
     private static string NormalizeModelCommand(string? command) =>
         (command ?? "").Trim().ToLowerInvariant();
 
+    internal static bool IsModelInferencePath(string? pathAndQuery)
+    {
+        if (string.IsNullOrWhiteSpace(pathAndQuery))
+        {
+            return false;
+        }
+
+        var path = pathAndQuery;
+        var queryIndex = path.IndexOfAny(['?', '#']);
+        if (queryIndex >= 0)
+        {
+            path = path[..queryIndex];
+        }
+
+        return ModelInferencePaths.Contains(path.TrimEnd('/'));
+    }
+
+    private static readonly HashSet<string> ModelInferencePaths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/api/generate",
+        "/api/chat",
+        "/api/embed",
+        "/api/embeddings",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/responses"
+    };
+
     private static StringContent JsonContent<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOptions), Encoding.UTF8, "application/json");
 
@@ -701,7 +730,7 @@ internal sealed class TunnelClient
 
         if (_llamaCppManager is not null)
         {
-            if (modelName is not null)
+            if (modelName is not null && IsModelInferencePath(message.PathAndQuery))
             {
                 effectiveUpstream = _llamaCppManager.GetUpstream(modelName);
                 if (effectiveUpstream is not null)
@@ -755,6 +784,13 @@ internal sealed class TunnelClient
                             modelName);
                     }
                 }
+            }
+            else if (modelName is not null)
+            {
+                _logger.LogDebug(
+                    "Skipping llama.cpp warm start for model '{Model}': {Path} is not an inference endpoint.",
+                    modelName,
+                    message.PathAndQuery);
             }
         }
 

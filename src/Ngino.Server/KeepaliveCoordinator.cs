@@ -36,16 +36,17 @@ internal static class KeepaliveCoordinator
             if (activeCount < targetCount)
             {
                 var toLoad = matching
-                    .Where(candidate => !candidate.HasActiveModel && candidate.HasListedModel)
+                    .Where(candidate => candidate.ActiveModel is null && candidate.HasListedModel)
                     .OrderBy(candidate => candidate.ClientId, StringComparer.OrdinalIgnoreCase)
                     .Take(targetCount - activeCount);
 
                 foreach (var candidate in toLoad)
                 {
-                    var key = $"{candidate.ClientId}:{member.Model}";
+                    var model = candidate.ListedModel!;
+                    var key = $"{candidate.ClientId}:{model}";
                     if (seen.Add(key))
                     {
-                        actions.Add(new KeepaliveAction(candidate.ClientId, "load", member.Model));
+                        actions.Add(new KeepaliveAction(candidate.ClientId, "load", model));
                     }
                 }
             }
@@ -58,10 +59,11 @@ internal static class KeepaliveCoordinator
 
                 foreach (var candidate in toUnload)
                 {
-                    var key = $"{candidate.ClientId}:{member.Model}";
+                    var model = candidate.ActiveModel!;
+                    var key = $"{candidate.ClientId}:{model}";
                     if (seen.Add(key))
                     {
-                        actions.Add(new KeepaliveAction(candidate.ClientId, "unload", member.Model));
+                        actions.Add(new KeepaliveAction(candidate.ClientId, "unload", model));
                     }
                 }
             }
@@ -102,8 +104,13 @@ internal static class KeepaliveCoordinator
 
 internal sealed record KeepaliveCandidate(
     string ClientId,
-    bool HasListedModel,
-    bool HasActiveModel);
+    string? ListedModel,
+    string? ActiveModel)
+{
+    public bool HasListedModel => ListedModel is not null;
+
+    public bool HasActiveModel => ActiveModel is not null;
+}
 
 internal sealed record KeepaliveAction(
     string ClientId,
