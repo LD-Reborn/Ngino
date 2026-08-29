@@ -97,4 +97,93 @@ public class KeepaliveCoordinatorTests
 
         Assert.Empty(actions);
     }
+
+    [Fact]
+    public void PlanActions_CatchAllZeroInstancesDoesNotUnloadModelsKeptWarmByAnotherRule()
+    {
+        var catchAll = new GroupClientKeepalivePolicy(0, 1, 0);
+        var warm = new GroupClientKeepalivePolicy(2, 1, 0);
+        var members = new[]
+        {
+            new GroupClientInfo(1, "all", "kraken", ".*", null, catchAll),
+            new GroupClientInfo(2, "embed", "kraken", "bge-m3:latest", null, warm)
+        };
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("kraken", "bge-m3:latest", "bge-m3:latest")
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions(members, candidates);
+
+        Assert.Empty(actions);
+    }
+
+    [Fact]
+    public void PlanActions_CatchAllZeroInstancesAllowsAnotherRuleToLoadMissingWarmInstance()
+    {
+        var catchAll = new GroupClientKeepalivePolicy(0, 1, 0);
+        var warm = new GroupClientKeepalivePolicy(1, 1, 0);
+        var members = new[]
+        {
+            new GroupClientInfo(1, "all", "kraken", ".*", null, catchAll),
+            new GroupClientInfo(2, "embed", "kraken", "bge-m3:latest", null, warm)
+        };
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("kraken", "bge-m3:latest", null)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions(members, candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("kraken", action.ClientId);
+        Assert.Equal("load", action.Command);
+        Assert.Equal("bge-m3:latest", action.Model);
+    }
+
+    [Fact]
+    public void PlanActions_OverlappingWarmRulesConvergeWithoutFighting()
+    {
+        var warm = new GroupClientKeepalivePolicy(1, 1, 0);
+        var members = new[]
+        {
+            new GroupClientInfo(1, "group-a", null, "bge-m3:latest", null, warm),
+            new GroupClientInfo(2, "group-b", null, "bge-m3:latest", null, warm)
+        };
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", "bge-m3:latest"),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", "bge-m3:latest")
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions(members, candidates);
+
+        Assert.Empty(actions);
+    }
+
+    [Fact]
+    public void PlanActions_TrimsSurplusOnlyOnUniquelyCoveredSlots()
+    {
+        var catchAll = new GroupClientKeepalivePolicy(0, 1, 0);
+        var warm = new GroupClientKeepalivePolicy(1, 1, 0);
+        var members = new[]
+        {
+            new GroupClientInfo(1, "all", null, ".*", null, catchAll),
+            new GroupClientInfo(2, "embed", null, "bge-m3:latest", null, warm)
+        };
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", "bge-m3:latest"),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", "bge-m3:latest"),
+            new KeepaliveCandidate("client-3", "loop:latest", "loop:latest"),
+            new KeepaliveCandidate("client-4", "other:latest", "other:latest")
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions(members, candidates);
+
+        Assert.Equal(2, actions.Count);
+        Assert.All(actions, action => Assert.Equal("unload", action.Command));
+        Assert.DoesNotContain(actions, action => action.Model == "bge-m3:latest");
+        Assert.DoesNotContain(actions, action => action.ClientId is "client-1" or "client-2");
+    }
 }
