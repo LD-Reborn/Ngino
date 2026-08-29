@@ -150,6 +150,24 @@ Any number of machines can connect at the same time; each registers under its cl
 - The status endpoint lists all connected clients, their in-flight request counts, and their last reported model lists.
 - If a client connects with an id that is already in use, the old connection is replaced and the replaced client exits instead of reconnecting.
 
+## Keepalive rules and warmth
+
+Each model entry in a group carries a keepalive policy:
+
+- *Min always loaded instances*: how many warm instances of that model the rule wants kept loaded at all times. These are checked every 10 seconds.
+- *Max parallelism per client*: how many concurrent requests one client is presumably able to handle for the model.
+- *Parallelism headroom*: spare capacity (in number of parallel requests) reserved so traffic spikes can be absorbed without saturating the GPU.
+
+Rules covering the same client/model cooperate instead of fighting:
+
+- A rule with `instances = 0` expresses *no demand*. It never unloads a model that another demanding rule (instances >= 1) wants warm, and it grants no protection itself.
+- Each demanding rule trims its warm instances down to its target count, but only for slots where it is the *sole* demanding rule. Surplus on slots another demanding rule wants warm is left alone.
+- Missing demand is grown up to the target count, preferring the warmest slot.
+
+Warmth is a numeric value calculated by the base warmth of the client + the specific model warmth.
+
+The resulting warmth value is displayed in the front-end using warm colors for positive values and cold colors (including a blueish-green tint) in order of magnitude increments. (i.e. 1-10, 11-100, 101-1000 and same for negative numbers)
+
 ## Embedding cache
 
 The server keeps an in-memory KV cache for embedding vectors and persists it to SQLite. The cache key is the requested `model` plus the exact input text. It applies to `POST /api/embed`, `POST /api/embeddings`, and `POST /v1/embeddings`; cache hits return JSON in the same endpoint family shape and include `X-Ngino-Embedding-Cache: hit`.
