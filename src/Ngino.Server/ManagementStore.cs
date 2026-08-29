@@ -378,7 +378,7 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc
+                SELECT disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc, warmth
                 FROM client_controls
                 WHERE client_id = $client_id
                 """;
@@ -394,21 +394,22 @@ internal sealed class ManagementStore
             var disabledManually = reader.GetInt32(1) != 0;
             var reason = reader.IsDBNull(2) ? null : reader.GetString(2);
             var disabledFrom = ReadNullableDateTimeOffset(reader, 3);
+            var warmth = reader.GetInt32(4);
 
             var now = DateTimeOffset.UtcNow;
             var isScheduled = disabledFrom > now;
 
             if (disabledManually && !isScheduled)
             {
-                return new ClientAccess(true, disabledFrom, null, true, reason);
+                return new ClientAccess(true, disabledFrom, null, true, reason, warmth);
             }
 
             if (!isScheduled && disabledUntil is { } until && until > now)
             {
-                return new ClientAccess(true, disabledFrom, until, false, reason);
+                return new ClientAccess(true, disabledFrom, until, false, reason, warmth);
             }
 
-            return new ClientAccess(false, disabledFrom, disabledUntil, false, reason);
+            return new ClientAccess(false, disabledFrom, disabledUntil, false, reason, warmth);
         }
     }
 
@@ -425,7 +426,7 @@ internal sealed class ManagementStore
         {
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT client_id, disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc FROM client_controls";
+            command.CommandText = "SELECT client_id, disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc, warmth FROM client_controls";
 
             using var reader = command.ExecuteReader();
             while (reader.Read())
@@ -435,19 +436,122 @@ internal sealed class ManagementStore
                 var disabledManually = reader.GetInt32(2) != 0;
                 var reason = reader.IsDBNull(3) ? null : reader.GetString(3);
                 var disabledFrom = ReadNullableDateTimeOffset(reader, 4);
+                var warmth = reader.GetInt32(5);
 
                 var now = DateTimeOffset.UtcNow;
                 var isScheduled = disabledFrom > now;
 
                 result[clientId] = disabledManually && !isScheduled
-                    ? new ClientAccess(true, disabledFrom, null, true, reason)
+                    ? new ClientAccess(true, disabledFrom, null, true, reason, warmth)
                     : !isScheduled && disabledUntil is { } until && until > now
-                        ? new ClientAccess(true, disabledFrom, until, false, reason)
-                        : new ClientAccess(false, disabledFrom, disabledUntil, disabledManually, reason);
+                        ? new ClientAccess(true, disabledFrom, until, false, reason, warmth)
+                        : new ClientAccess(false, disabledFrom, disabledUntil, disabledManually, reason, warmth);
             }
         }
 
         return result;
+    }
+
+    public IReadOnlyList<ClientModelWarmth> ListClientModelWarmth()
+    {
+        if (!_isAvailable)
+        {
+            return [];
+        }
+
+        var result = new List<ClientModelWarmth>();
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT client_id, model, warmth FROM client_model_warmth";
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new ClientModelWarmth(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetInt32(2)));
+            }
+        }
+
+        return result;
+    }
+
+    public void SetClientWarmth(string clientId, int warmth)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            throw new ArgumentException("Client id is required.", nameof(clientId));
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO client_controls (client_id, warmth, updated_at_utc)
+                VALUES ($client_id, $warmth, $updated_at_utc)
+                ON CONFLICT(client_id) DO UPDATE SET
+                    warmth = excluded.warmth,
+                    updated_at_utc = excluded.updated_at_utc
+                """;
+            command.Parameters.AddWithValue("$client_id", clientId);
+            command.Parameters.AddWithValue("$warmth", warmth);
+            command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
+            command.ExecuteNonQuery();
+        }
+    }
+
+    public void SetClientModelWarmth(string clientId, string model, int warmth)
+    {
+        EnsureAvailable();
+
+        if (string.IsNullOrWhiteSpace(clientId))
+        {
+            throw new ArgumentException("Client id is required.", nameof(clientId));
+        }
+
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            throw new ArgumentException("Model is required.", nameof(model));
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+
+            if (warmth == 0)
+            {
+                using var remove = connection.CreateCommand();
+                remove.CommandText = """
+                    DELETE FROM client_model_warmth
+                    WHERE client_id = $client_id AND model = $model
+                    """;
+                remove.Parameters.AddWithValue("$client_id", clientId);
+                remove.Parameters.AddWithValue("$model", model);
+                remove.ExecuteNonQuery();
+                return;
+            }
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO client_model_warmth (client_id, model, warmth, updated_at_utc)
+                VALUES ($client_id, $model, $warmth, $updated_at_utc)
+                ON CONFLICT(client_id, model) DO UPDATE SET
+                    warmth = excluded.warmth,
+                    updated_at_utc = excluded.updated_at_utc
+                """;
+            command.Parameters.AddWithValue("$client_id", clientId);
+            command.Parameters.AddWithValue("$model", model);
+            command.Parameters.AddWithValue("$warmth", warmth);
+            command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
+            command.ExecuteNonQuery();
+        }
     }
 
     public void DisableClient(string clientId, TimeSpan? duration, bool manually, string? reason, DateTimeOffset? startAtUtc = null, DateTimeOffset? untilUtc = null)
@@ -2187,7 +2291,16 @@ internal sealed class ManagementStore
                     disabled_from_utc TEXT NULL,
                     disabled_manually INTEGER NOT NULL DEFAULT 0,
                     disabled_reason TEXT NULL,
+                    warmth INTEGER NOT NULL DEFAULT 0,
                     updated_at_utc TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS client_model_warmth (
+                    client_id TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    warmth INTEGER NOT NULL DEFAULT 0,
+                    updated_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (client_id, model)
                 );
 
                 CREATE TABLE IF NOT EXISTS user_keys (
@@ -2513,6 +2626,18 @@ internal sealed class ManagementStore
                 addFromCol.CommandText = "ALTER TABLE client_controls ADD COLUMN disabled_from_utc TEXT NULL";
                 addFromCol.ExecuteNonQuery();
             }
+
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('client_controls') WHERE name = 'warmth'
+                """;
+            var hasWarmthColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasWarmthColumn)
+            {
+                using var addWarmth = connection.CreateCommand();
+                addWarmth.CommandText = "ALTER TABLE client_controls ADD COLUMN warmth INTEGER NOT NULL DEFAULT 0";
+                addWarmth.ExecuteNonQuery();
+            }
         }
 
         _logger.LogInformation(
@@ -2618,10 +2743,16 @@ internal sealed record ClientAccess(
     DateTimeOffset? DisabledFromUtc,
     DateTimeOffset? DisabledUntilUtc,
     bool DisabledManually,
-    string? DisabledReason)
+    string? DisabledReason,
+    int Warmth = 0)
 {
     public static ClientAccess Enabled { get; } = new(false, null, null, false, null);
 }
+
+internal sealed record ClientModelWarmth(
+    string ClientId,
+    string Model,
+    int Warmth);
 
 internal sealed record UserKeyInfo(
     string Id,

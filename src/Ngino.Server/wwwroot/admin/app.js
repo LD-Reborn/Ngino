@@ -105,6 +105,17 @@ function positionPopover(popover, anchor) {
 }
 
 content.addEventListener("click", async (event) => {
+  const warmthEdit = event.target.closest("[data-warmth-edit]");
+  if (warmthEdit) {
+    event.preventDefault();
+    try {
+      await editWarmth(warmthEdit.dataset);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error), true);
+    }
+    return;
+  }
+
   const button = event.target.closest("button[data-action]");
   if (!button) {
     return;
@@ -573,6 +584,7 @@ function clientsTable(clients) {
         <div class="badge-row">
           ${client.connected ? badge("Connected", "good") : badge("Offline", "")}
           ${client.disabled ? badge(client.disabledManually ? "Disabled manual" : "Disabled timed", "bad") : badge("Enabled", "good")}
+          ${clientWarmthBadge(client)}
         </div>
         ${client.disabled ? `<div class="cell-sub">${escapeHtml(disabledText(client))}</div>` : ""}
         ${isScheduled(client) ? `<div class="cell-sub">${escapeHtml(disabledText(client))}</div>` : ""}
@@ -582,8 +594,8 @@ function clientsTable(clients) {
         <div class="cell-main">${number(client.requestStats.total)}</div>
         <div class="cell-sub">${number(client.requestStats.last10Minutes)} in 10m, ${number(client.requestStats.lastHour)} in 1h</div>
       </td>
-      <td class="col-models">${modelBadges(client.models)}</td>
-      <td>${modelBadges(client.activeModels)}</td>
+      <td class="col-models">${warmthModelBadges(client, client.models)}</td>
+      <td>${warmthModelBadges(client, client.activeModels)}</td>
       <td>
         <div class="badge-row">
           ${groups.length ? groups.map((g) => `<a class="badge" href="#groups/${encodeURIComponent(g)}">${escapeHtml(groupNames[g] || g)}</a>`).join("") : `<span class="cell-sub">None</span>`}
@@ -679,8 +691,8 @@ function modelsTable(models) {
         <div class="cell-main">${escapeHtml(model.name)}</div>
         <div class="cell-sub">${number(model.metrics.totalRequests)} total requests</div>
       </td>
-      <td>${modelBadges(model.listedClients)}</td>
-      <td>${modelBadges(model.activeClients)}</td>
+      <td>${modelClientsBadges(model.name, model.listedClients)}</td>
+      <td>${modelClientsBadges(model.name, model.activeClients)}</td>
       <td>
         <div class="cell-main">${number(model.metrics.requestsLast10Minutes)}</div>
         <div class="cell-sub">${number(model.metrics.requestsLastHour)} in last hour</div>
@@ -756,11 +768,11 @@ function renderModelDetail() {
       <div class="panel-body">
         <div class="badge-row">
           ${badge("Listed", detail.listedClients.length ? "good" : "")}
-          ${modelBadges(detail.listedClients)}
+          ${modelClientsBadges(model, detail.listedClients)}
         </div>
         <div class="badge-row" style="margin-top:8px">
           ${badge("Active", detail.activeClients.length ? "good" : "warn")}
-          ${modelBadges(detail.activeClients)}
+          ${modelClientsBadges(model, detail.activeClients)}
         </div>
       </div>
     </div>
@@ -1844,6 +1856,107 @@ function modelBadges(items) {
 
 function badge(text, kind) {
   return `<span class="badge ${kind || ""}">${escapeHtml(text)}</span>`;
+}
+
+function warmthBadgeClass(value) {
+  if (value < 0) {
+    if (value >= -10) return "warm-green-blue";
+    if (value >= -100) return "warm-light-blue";
+    if (value >= -1000) return "warm-blue";
+    return "warm-dark-blue";
+  }
+  if (value > 0) {
+    if (value <= 10) return "warm-yellow";
+    if (value <= 100) return "warm-orange";
+    if (value <= 1000) return "warm-red";
+    return "warm-dark-red";
+  }
+  return "";
+}
+
+function formatWarmth(value) {
+  return value < 0 ? String(value) : `+${value}`;
+}
+
+function clientWarmth(client) {
+  return client && Number.isInteger(client.warmth) ? client.warmth : 0;
+}
+
+function modelOverrideWarmth(client, model) {
+  const override = (client?.modelWarmth || []).find((item) => item.model === model);
+  return override && Number.isInteger(override.warmth) ? override.warmth : 0;
+}
+
+function effectiveWarmth(clientId, model) {
+  const client = (state.summary?.clients || []).find((item) => item.id === clientId);
+  return clientWarmth(client) + modelOverrideWarmth(client, model);
+}
+
+function warmthTip(clientId, model) {
+  const client = (state.summary?.clients || []).find((item) => item.id === clientId);
+  if (typeof model !== "string") {
+    const base = clientWarmth(client);
+    return `Warmth ${formatWarmth(base)} (base). Click to change.`;
+  }
+  const base = clientWarmth(client);
+  const override = modelOverrideWarmth(client, model);
+  const effective = base + override;
+  const parts = [`base ${formatWarmth(base)}`, `model ${formatWarmth(override)}`, `effective ${formatWarmth(effective)}`];
+  return `Warmth: ${parts.join(", ")}. Click to change.`;
+}
+
+function warmthModelBadge(clientId, model) {
+  const value = effectiveWarmth(clientId, model);
+  return `<span class="badge ${warmthBadgeClass(value)}" data-warmth-edit="model" data-client-id="${escapeAttr(clientId)}" data-model="${escapeAttr(model)}" data-warmth="${value}" title="${escapeAttr(warmthTip(clientId, model))}" aria-label="Edit warmth for ${escapeAttr(model)} on ${escapeAttr(clientId)}">${escapeHtml(model)}</span>`;
+}
+
+function modelClientsBadges(model, clients) {
+  if (!clients || !clients.length) {
+    return `<span class="cell-sub">None</span>`;
+  }
+  return `<div class="badge-row">${clients.map((clientId) => warmthModelBadge(clientId, model)).join("")}</div>`;
+}
+
+function warmthModelBadges(client, models) {
+  if (!models || !models.length) {
+    return `<span class="cell-sub">None</span>`;
+  }
+  return `<div class="badge-row">${models.map((model) => warmthModelBadge(client.id, model)).join("")}</div>`;
+}
+
+function clientWarmthBadge(client) {
+  const value = clientWarmth(client);
+  const color = warmthBadgeClass(value);
+  return `<span class="badge ${color}" data-warmth-edit="client" data-client-id="${escapeAttr(client.id)}" data-warmth="${value}" title="${escapeAttr(warmthTip(client.id))}" aria-label="Edit base warmth for ${escapeAttr(client.id)}">🔥 ${formatWarmth(value)}</span>`;
+}
+
+async function editWarmth(target) {
+  const isModel = target.warmthEdit === "model";
+  const clientId = target.clientId;
+  const current = Number(target.warmth || 0);
+  const label = isModel
+    ? `warmth for "${target.model}" on ${clientId}`
+    : `base warmth for ${clientId}`;
+  const hint = "Higher prefers keeping warm; lower prefers kept unloaded; 0 = neutral.";
+
+  const input = window.prompt(`${label} (current ${formatWarmth(current)}). ${hint}`, String(current));
+  if (input === null) {
+    return;
+  }
+
+  const value = Number(input);
+  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647 || input.trim() === "") {
+    setNotice("Warmth must be an integer.", true);
+    return;
+  }
+
+  const path = isModel
+    ? `/clients/${encodeURIComponent(clientId)}/models/${encodeURIComponent(target.model)}/warmth`
+    : `/clients/${encodeURIComponent(clientId)}/warmth`;
+
+  await api(path, { method: "PUT", body: { warmth: value } });
+  setNotice(`Updated ${label} to ${formatWarmth(value)}.`);
+  await refresh();
 }
 
 function metric(value, label) {

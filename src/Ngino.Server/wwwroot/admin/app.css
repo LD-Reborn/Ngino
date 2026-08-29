@@ -470,6 +470,64 @@ tr:last-child td {
   color: var(--blue);
 }
 
+.badge[data-warmth-edit] {
+  cursor: pointer;
+}
+
+.badge[data-warmth-edit]:hover {
+  filter: brightness(1.05);
+}
+
+.badge.warm-yellow {
+  border-color: #e5c665;
+  background: #fff8d6;
+  color: #8a6d1c;
+}
+
+.badge.warm-orange {
+  border-color: #ef9e4f;
+  background: #ffe9d3;
+  color: #b45309;
+}
+
+.badge.warm-red {
+  border-color: #ef8f8a;
+  background: #ffe1df;
+  color: #b91c1c;
+}
+
+.badge.warm-dark-red {
+  border-color: #c26a6a;
+  background: #f8d2d2;
+  color: #7f1d1d;
+  font-weight: 800;
+}
+
+.badge.warm-green-blue {
+  border-color: #a3cfc1;
+  background: #e7f6f0;
+  color: #0f766e;
+}
+
+.badge.warm-light-blue {
+  border-color: #a8c8ee;
+  background: #e4f0fc;
+  color: #1d4ed8;
+}
+
+.badge.warm-blue {
+  border-color: #8fb0dc;
+  background: #d8e6f8;
+  color: #1e40af;
+}
+
+.badge.warm-dark-blue {
+  border-color: #6f8fc0;
+  background: #cddcef;
+  color: #172554;
+  font-weight: 800;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
