@@ -85,7 +85,8 @@ internal static class KeepaliveCoordinator
             var warm = slots
                 .Where(slot => MayTrim(slot, row))
                 .Where(slot => slot.Active && desired.Contains(key(slot)))
-                .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(slot => slot.Warmth)
+                .ThenBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -96,7 +97,7 @@ internal static class KeepaliveCoordinator
             }
         }
 
-        // Grow: fill unmet demand, preferring lexicographically earlier slots, until a fixed point.
+        // Grow: fill unmet demand, preferring warmer slots, until a fixed point.
         bool changed;
         do
         {
@@ -119,7 +120,8 @@ internal static class KeepaliveCoordinator
 
                 var toLoad = covered
                     .Where(slot => !desired.Contains(key(slot)))
-                    .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(slot => slot.Warmth)
+                    .ThenBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
                     .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
                     .Take(needed)
                     .ToList();
@@ -173,14 +175,16 @@ internal static class KeepaliveCoordinator
                 candidate.ClientId,
                 model,
                 Listed: candidate.HasListedModel,
-                Active: candidate.HasActiveModel);
+                Active: candidate.HasActiveModel,
+                Warmth: candidate.Warmth);
 
             if (distinct.TryGetValue(slot.Key, out var existing))
             {
                 distinct[slot.Key] = existing with
                 {
                     Listed = existing.Listed || slot.Listed,
-                    Active = existing.Active || slot.Active
+                    Active = existing.Active || slot.Active,
+                    Warmth = Math.Max(existing.Warmth, slot.Warmth)
                 };
             }
             else
@@ -228,7 +232,7 @@ internal static class KeepaliveCoordinator
         }
     }
 
-    private readonly record struct Slot(string ClientId, string Model, bool Listed, bool Active)
+    private readonly record struct Slot(string ClientId, string Model, bool Listed, bool Active, int Warmth)
     {
         public string Key => $"{ClientId}\u0000{Model}";
     }
@@ -237,7 +241,8 @@ internal static class KeepaliveCoordinator
 internal sealed record KeepaliveCandidate(
     string ClientId,
     string? ListedModel,
-    string? ActiveModel)
+    string? ActiveModel,
+    int Warmth = 0)
 {
     public bool HasListedModel => ListedModel is not null;
 

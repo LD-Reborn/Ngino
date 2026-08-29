@@ -212,4 +212,77 @@ public class KeepaliveCoordinatorTests
         Assert.Equal("bge-m3:latest", action.Model);
         Assert.Equal("kraken", action.ClientId);
     }
+
+    [Fact]
+    public void PlanActions_GrowPrefersWarmestSlot()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", null, "bge-m3:latest", null, policy);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", null, Warmth: 0),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", null, Warmth: 5)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("client-2", action.ClientId);
+        Assert.Equal("load", action.Command);
+        Assert.Equal("bge-m3:latest", action.Model);
+    }
+
+    [Fact]
+    public void PlanActions_TrimDropsLowestWarmthFirst()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", null, "bge-m3:latest", null, policy);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", "bge-m3:latest", Warmth: 5),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", "bge-m3:latest", Warmth: 0)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("client-2", action.ClientId);
+        Assert.Equal("unload", action.Command);
+        Assert.Equal("bge-m3:latest", action.Model);
+    }
+
+    [Fact]
+    public void PlanActions_EqualWarmthFallsBackToLexicographicOrder()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", null, "bge-m3:latest", null, policy);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", null, Warmth: 3),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", null, Warmth: 3)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("client-1", action.ClientId);
+    }
+
+    [Fact]
+    public void PlanActions_NegativeWarmthUnloadedBeforeNeutralSlot()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", null, "bge-m3:latest", null, policy);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "bge-m3:latest", "bge-m3:latest", Warmth: -50),
+            new KeepaliveCandidate("client-2", "bge-m3:latest", "bge-m3:latest", Warmth: 0)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("client-1", action.ClientId);
+        Assert.Equal("unload", action.Command);
+    }
 }
