@@ -11,3 +11,5 @@
 !**/appsettings.Example.json
 debug/**
 publish/**
+.env
+**/.env
