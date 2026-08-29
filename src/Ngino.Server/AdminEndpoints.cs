@@ -188,6 +188,32 @@ internal static class AdminEndpoints
             }
         });
 
+        api.MapPut("/clients/{clientId}/warmth", (string clientId, SetWarmthRequest request, ManagementStore store) =>
+        {
+            try
+            {
+                store.SetClientWarmth(clientId, request.Warmth);
+                return Results.Ok(new { clientId, warmth = request.Warmth });
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
+        api.MapPut("/clients/{clientId}/models/{model}/warmth", (string clientId, string model, SetWarmthRequest request, ManagementStore store) =>
+        {
+            try
+            {
+                store.SetClientModelWarmth(clientId, model, request.Warmth);
+                return Results.Ok(new { clientId, model, warmth = request.Warmth });
+            }
+            catch (Exception exception)
+            {
+                return Results.BadRequest(new { error = exception.Message });
+            }
+        });
+
         api.MapGet("/models/detail", async (
             HttpContext context,
             string model,
@@ -661,6 +687,8 @@ internal static class AdminEndpoints
         var connected = hub.ClientSnapshots.ToDictionary(client => client.Id, StringComparer.OrdinalIgnoreCase);
         var controls = store.ListClientControls();
         var stats = store.GetClientRequestStats();
+        var modelWarmthByClient = store.ListClientModelWarmth()
+            .ToLookup(entry => entry.ClientId, StringComparer.OrdinalIgnoreCase);
         var clientIds = connected.Keys
             .Concat(controls.Keys)
             .Concat(stats.Keys)
@@ -675,6 +703,11 @@ internal static class AdminEndpoints
             stats.TryGetValue(clientId, out var requestStats);
             access ??= ClientAccess.Enabled;
 
+            var modelWarmth = modelWarmthByClient[clientId]
+                .OrderBy(entry => entry.Model, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => new ClientModelWarmthInfo(entry.Model, entry.Warmth))
+                .ToList();
+
             result.Add(new ClientSummary(
                 clientId,
                 snapshot is not null,
@@ -687,6 +720,8 @@ internal static class AdminEndpoints
                 access.DisabledUntilUtc,
                 access.DisabledManually,
                 access.DisabledReason,
+                access.Warmth,
+                modelWarmth,
                 requestStats ?? new ClientRequestStats(0, 0, 0)));
         }
 
@@ -936,6 +971,10 @@ internal sealed record AddPaymentRequest(
     double Amount,
     string? Description);
 
+internal sealed record SetWarmthRequest(int Warmth);
+
+internal sealed record ClientModelWarmthInfo(string Model, int Warmth);
+
 internal sealed record ClientSummary(
     string Id,
     bool Connected,
@@ -948,6 +987,8 @@ internal sealed record ClientSummary(
     DateTimeOffset? DisabledUntilUtc,
     bool DisabledManually,
     string? DisabledReason,
+    int Warmth,
+    IReadOnlyList<ClientModelWarmthInfo> ModelWarmth,
     ClientRequestStats RequestStats);
 
 internal sealed record ModelSummary(
