@@ -8,69 +8,196 @@ internal static class KeepaliveCoordinator
         IEnumerable<GroupClientInfo> members,
         IEnumerable<KeepaliveCandidate> candidates)
     {
-        var actions = new List<KeepaliveAction>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var candidateList = candidates.ToList();
+        var rows = members
+            .Where(member => !string.IsNullOrWhiteSpace(member.Model))
+            .OrderBy(member => member.Id)
+            .ToList();
 
-        foreach (var member in members)
+        var slots = BuildSlots(candidates);
+        if (rows.Count == 0 || slots.Count == 0)
         {
-            if (string.IsNullOrWhiteSpace(member.Model))
+            return [];
+        }
+
+        var key = static (Slot slot) => slot.Key;
+        var desired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Least-churn seed: every currently active slot stays desired unless a rule trims it.
+        foreach (var slot in slots.Where(slot => slot.Active))
+        {
+            desired.Add(key(slot));
+        }
+
+        // Precompute which rules cover each slot so overlaps are resolved once.
+        var rowsById = rows.ToDictionary(row => row.Id);
+        var coveringRows = new Dictionary<string, List<long>>(slots.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var slot in slots)
+        {
+            var covering = new List<long>(rows.Count);
+            foreach (var row in rows)
             {
-                continue;
+                if (SlotCoveredBy(row, slot))
+                {
+                    covering.Add(row.Id);
+                }
             }
 
-            var policy = member.KeepalivePolicy ?? GroupClientKeepalivePolicy.Default;
-            var targetCount = Math.Max(0, policy.InstancesToKeepAlive);
-            var matching = candidateList
-                .Where(candidate => MatchesMember(candidate.ClientId, member))
+            coveringRows[slot.Key] = covering;
+        }
+
+        bool IsCoveredBy(Slot slot, long rowId) =>
+            coveringRows.TryGetValue(slot.Key, out var covering) && covering.Contains(rowId);
+
+        // A rule may trim a slot only when it is the sole *demanding* rule (instances >= 1)
+        // covering it. Demandless rules (instances = 0) have no interest in keeping a model
+        // warm, so they grant no protection: another rule's capacity still applies.
+        bool MayTrim(Slot slot, GroupClientInfo row)
+        {
+            if (!coveringRows.TryGetValue(slot.Key, out var covering) || !covering.Contains(row.Id))
+            {
+                return false;
+            }
+
+            long? soleDemandingId = null;
+            foreach (var id in covering)
+            {
+                if (TargetInstances(rowsById[id]) <= 0)
+                {
+                    continue;
+                }
+
+                if (soleDemandingId is not null)
+                {
+                    return false;
+                }
+
+                soleDemandingId = id;
+            }
+
+            return soleDemandingId is null || soleDemandingId == row.Id;
+        }
+
+        // Trim: bring each rule's warm slots down to its instance target. Slots that another
+        // demanding rule wants warm are protected, so rules cooperate instead of fighting.
+        foreach (var row in rows)
+        {
+            var target = TargetInstances(row);
+            var warm = slots
+                .Where(slot => MayTrim(slot, row))
+                .Where(slot => slot.Active && desired.Contains(key(slot)))
+                .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            if (matching.Count == 0)
+            var surplus = warm.Count - target;
+            foreach (var slot in warm.Take(surplus))
             {
-                continue;
+                desired.Remove(key(slot));
             }
+        }
 
-            var active = matching.Where(candidate => candidate.HasActiveModel).ToList();
-            var activeCount = active.Count;
-
-            if (activeCount < targetCount)
+        // Grow: fill unmet demand, preferring lexicographically earlier slots, until a fixed point.
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var row in rows)
             {
-                var toLoad = matching
-                    .Where(candidate => candidate.ActiveModel is null && candidate.HasListedModel)
-                    .OrderBy(candidate => candidate.ClientId, StringComparer.OrdinalIgnoreCase)
-                    .Take(targetCount - activeCount);
-
-                foreach (var candidate in toLoad)
+                var target = TargetInstances(row);
+                if (target <= 0)
                 {
-                    var model = candidate.ListedModel!;
-                    var key = $"{candidate.ClientId}:{model}";
-                    if (seen.Add(key))
+                    continue;
+                }
+
+                var covered = slots.Where(slot => IsCoveredBy(slot, row.Id)).ToList();
+                var warmCount = covered.Count(slot => desired.Contains(key(slot)));
+                var needed = target - warmCount;
+                if (needed <= 0)
+                {
+                    continue;
+                }
+
+                var toLoad = covered
+                    .Where(slot => !desired.Contains(key(slot)))
+                    .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
+                    .Take(needed)
+                    .ToList();
+
+                foreach (var slot in toLoad)
+                {
+                    if (desired.Add(key(slot)))
                     {
-                        actions.Add(new KeepaliveAction(candidate.ClientId, "load", model));
+                        changed = true;
                     }
                 }
             }
-            else if (activeCount > targetCount)
-            {
-                var toUnload = active
-                    .OrderByDescending(candidate => candidate.ClientId, StringComparer.OrdinalIgnoreCase)
-                    .Skip(targetCount)
-                    .Take(activeCount - targetCount);
+        } while (changed);
 
-                foreach (var candidate in toUnload)
-                {
-                    var model = candidate.ActiveModel!;
-                    var key = $"{candidate.ClientId}:{model}";
-                    if (seen.Add(key))
-                    {
-                        actions.Add(new KeepaliveAction(candidate.ClientId, "unload", model));
-                    }
-                }
-            }
+        var actions = new List<KeepaliveAction>(slots.Count);
+
+        foreach (var slot in slots
+            .Where(slot => slot.Active && !desired.Contains(key(slot)))
+            .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase))
+        {
+            actions.Add(new KeepaliveAction(slot.ClientId, "unload", slot.Model));
+        }
+
+        foreach (var slot in slots
+            .Where(slot => !slot.Active && slot.Listed && desired.Contains(key(slot)))
+            .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase))
+        {
+            actions.Add(new KeepaliveAction(slot.ClientId, "load", slot.Model));
         }
 
         return actions;
     }
+
+    private static int TargetInstances(GroupClientInfo member) =>
+        Math.Max(0, member.KeepalivePolicy?.InstancesToKeepAlive ?? GroupClientKeepalivePolicy.Default.InstancesToKeepAlive);
+
+    private static List<Slot> BuildSlots(IEnumerable<KeepaliveCandidate> candidates)
+    {
+        var distinct = new Dictionary<string, Slot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            if (candidate.ListedModel is null && candidate.ActiveModel is null)
+            {
+                continue;
+            }
+
+            var model = candidate.ListedModel ?? candidate.ActiveModel!;
+            var slot = new Slot(
+                candidate.ClientId,
+                model,
+                Listed: candidate.HasListedModel,
+                Active: candidate.HasActiveModel);
+
+            if (distinct.TryGetValue(slot.Key, out var existing))
+            {
+                distinct[slot.Key] = existing with
+                {
+                    Listed = existing.Listed || slot.Listed,
+                    Active = existing.Active || slot.Active
+                };
+            }
+            else
+            {
+                distinct[slot.Key] = slot;
+            }
+        }
+
+        return distinct.Values
+            .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool SlotCoveredBy(GroupClientInfo member, Slot slot) =>
+        MatchesMember(slot.ClientId, member)
+        && GroupAccess.ModelSelectorMatches(member.Model!, slot.Model);
 
     private static bool MatchesMember(string clientId, GroupClientInfo member)
     {
@@ -99,6 +226,11 @@ internal static class KeepaliveCoordinator
         {
             return false;
         }
+    }
+
+    private readonly record struct Slot(string ClientId, string Model, bool Listed, bool Active)
+    {
+        public string Key => $"{ClientId}\u0000{Model}";
     }
 }
 

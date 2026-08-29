@@ -1163,7 +1163,7 @@ function renderGroupDetail() {
             ${availableModelNames.length ? `<datalist id="availableModels">${availableModelNames.map((name) => `<option value="${escapeAttr(name)}"></option>`).join("")}</datalist>` : ""}
           </div>
           <div class="field">
-            ${renderFieldLabel("addModelKeepaliveInstances", "Min always loaded instances", "The minimum number of warm model instances that should stay loaded and ready so requests do not wait for a cold start. Set to 0 to keep none loaded between requests.")}
+            ${renderFieldLabel("addModelKeepaliveInstances", "Min always loaded instances", "The minimum number of warm model instances that should stay loaded and ready so requests do not wait for a cold start. Set to 0 to keep none loaded between requests. Rules are combined per client, so several groups cooperate: 0 only unloads models no other rule wants warm.")}
             <input class="input" id="addModelKeepaliveInstances" name="keepaliveInstancesToKeepAlive" type="number" min="0" step="1" value="0">
           </div>
           <div class="field">
