@@ -1937,16 +1937,15 @@ async function editWarmth(target) {
   const label = isModel
     ? `warmth for "${target.model}" on ${clientId}`
     : `base warmth for ${clientId}`;
-  const hint = "Higher prefers keeping warm; lower prefers kept unloaded; 0 = neutral.";
 
-  const input = window.prompt(`${label} (current ${formatWarmth(current)}). ${hint}`, String(current));
-  if (input === null) {
-    return;
-  }
-
-  const value = Number(input);
-  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647 || input.trim() === "") {
-    setNotice("Warmth must be an integer.", true);
+  let value;
+  try {
+    value = await showWarmthModal({
+      title: `Set ${label}`,
+      current,
+      hint: "Coldest models are unloaded first when demand goes back down. Warmer models are unloaded last. Warmth is calculated by adding client warmth and model warmth."
+    });
+  } catch {
     return;
   }
 
@@ -1957,6 +1956,74 @@ async function editWarmth(target) {
   await api(path, { method: "PUT", body: { warmth: value } });
   setNotice(`Updated ${label} to ${formatWarmth(value)}.`);
   await refresh();
+}
+
+function showWarmthModal({ title, current, hint }) {
+  return new Promise((resolve, reject) => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal-dialog">
+        <h3>${escapeHtml(title)}</h3>
+        <p class="field-label">${escapeHtml(hint)}</p>
+        <div class="field">
+          <span class="field-label">Warmth</span>
+          <input type="number" id="warmth-value" class="input" value="${current}" step="1" autocomplete="off">
+        </div>
+        <div class="form-row modal-actions">
+          <button class="button secondary" id="warmth-cancel" type="button">Cancel</button>
+          <button class="button warning" id="warmth-ok" type="button">Save</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("visible"));
+
+    const input = overlay.querySelector("#warmth-value");
+    input.focus();
+    input.select();
+
+    function close() {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    }
+
+    function submit() {
+      const raw = input.value.trim();
+      const value = Number(raw);
+      if (raw === "" || !Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
+        setNotice("Warmth must be an integer.", true);
+        return;
+      }
+      close();
+      resolve(value);
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        close();
+        reject(new Error("Cancelled"));
+      } else if (event.key === "Enter") {
+        submit();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+
+    overlay.querySelector("#warmth-ok").addEventListener("click", submit);
+    overlay.querySelector("#warmth-cancel").addEventListener("click", () => {
+      close();
+      reject(new Error("Cancelled"));
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) {
+        close();
+        reject(new Error("Cancelled"));
+      }
+    });
+  });
 }
 
 function metric(value, label) {
