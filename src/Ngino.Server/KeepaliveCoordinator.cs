@@ -29,31 +29,61 @@ internal static class KeepaliveCoordinator
         }
 
         // Precompute which rules cover each slot so overlaps are resolved once.
-        var coveringRows = new Dictionary<string, List<GroupClientInfo>>(slots.Count, StringComparer.OrdinalIgnoreCase);
+        var rowsById = rows.ToDictionary(row => row.Id);
+        var coveringRows = new Dictionary<string, List<long>>(slots.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var slot in slots)
         {
-            var covering = new List<GroupClientInfo>(rows.Count);
+            var covering = new List<long>(rows.Count);
             foreach (var row in rows)
             {
                 if (SlotCoveredBy(row, slot))
                 {
-                    covering.Add(row);
+                    covering.Add(row.Id);
                 }
             }
 
             coveringRows[slot.Key] = covering;
         }
 
-        bool IsCoveredBy(Slot slot, GroupClientInfo row) => coveringRows[slot.Key].Contains(row);
-        bool IsUniquelyCovered(Slot slot) => coveringRows[slot.Key].Count == 1;
+        bool IsCoveredBy(Slot slot, long rowId) =>
+            coveringRows.TryGetValue(slot.Key, out var covering) && covering.Contains(rowId);
 
-        // Trim: a rule may shrink warm slots only where it is the sole rule (no overlap),
-        // down to its instance target. Overlapping slots stay untouched, so rules never fight.
+        // A rule may trim a slot only when it is the sole *demanding* rule (instances >= 1)
+        // covering it. Demandless rules (instances = 0) have no interest in keeping a model
+        // warm, so they grant no protection: another rule's capacity still applies.
+        bool MayTrim(Slot slot, GroupClientInfo row)
+        {
+            if (!coveringRows.TryGetValue(slot.Key, out var covering) || !covering.Contains(row.Id))
+            {
+                return false;
+            }
+
+            long? soleDemandingId = null;
+            foreach (var id in covering)
+            {
+                if (TargetInstances(rowsById[id]) <= 0)
+                {
+                    continue;
+                }
+
+                if (soleDemandingId is not null)
+                {
+                    return false;
+                }
+
+                soleDemandingId = id;
+            }
+
+            return soleDemandingId is null || soleDemandingId == row.Id;
+        }
+
+        // Trim: bring each rule's warm slots down to its instance target. Slots that another
+        // demanding rule wants warm are protected, so rules cooperate instead of fighting.
         foreach (var row in rows)
         {
             var target = TargetInstances(row);
             var warm = slots
-                .Where(slot => IsUniquelyCovered(slot) && IsCoveredBy(slot, row))
+                .Where(slot => MayTrim(slot, row))
                 .Where(slot => slot.Active && desired.Contains(key(slot)))
                 .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase)
@@ -79,7 +109,7 @@ internal static class KeepaliveCoordinator
                     continue;
                 }
 
-                var covered = slots.Where(slot => IsCoveredBy(slot, row)).ToList();
+                var covered = slots.Where(slot => IsCoveredBy(slot, row.Id)).ToList();
                 var warmCount = covered.Count(slot => desired.Contains(key(slot)));
                 var needed = target - warmCount;
                 if (needed <= 0)

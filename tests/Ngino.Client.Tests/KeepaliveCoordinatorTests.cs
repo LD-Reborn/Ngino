@@ -162,7 +162,7 @@ public class KeepaliveCoordinatorTests
     }
 
     [Fact]
-    public void PlanActions_TrimsSurplusOnlyOnUniquelyCoveredSlots()
+    public void PlanActions_TrimsSurplusOnSlotsNoOtherDemandingRuleWants()
     {
         var catchAll = new GroupClientKeepalivePolicy(0, 1, 0);
         var warm = new GroupClientKeepalivePolicy(1, 1, 0);
@@ -181,9 +181,35 @@ public class KeepaliveCoordinatorTests
 
         var actions = KeepaliveCoordinator.PlanActions(members, candidates);
 
-        Assert.Equal(2, actions.Count);
+        // The embed rule trims its surplus from 2 down to 1 (client-1 is dropped, client-2 kept),
+        // and the demandless catch-all trims the slots only it covers.
+        Assert.Equal(3, actions.Count);
         Assert.All(actions, action => Assert.Equal("unload", action.Command));
-        Assert.DoesNotContain(actions, action => action.Model == "bge-m3:latest");
-        Assert.DoesNotContain(actions, action => action.ClientId is "client-1" or "client-2");
+        Assert.Contains(actions, action => action.ClientId == "client-1" && action.Model == "bge-m3:latest");
+        Assert.DoesNotContain(actions, action => action.Model == "bge-m3:latest" && action.ClientId == "client-2");
+    }
+
+    [Fact]
+    public void PlanActions_SingleInstanceRuleTrimsToOneWarmAcrossPoolDespiteCatchAllCoverage()
+    {
+        var catchAll = new GroupClientKeepalivePolicy(0, 1, 0);
+        var single = new GroupClientKeepalivePolicy(1, 1, 0);
+        var members = new[]
+        {
+            new GroupClientInfo(1, "all", null, ".*", null, catchAll),
+            new GroupClientInfo(2, "embed", null, "bge-m3:latest", null, single)
+        };
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("kraken", "bge-m3:latest", "bge-m3:latest"),
+            new KeepaliveCandidate("lucretia-pc", "bge-m3:latest", "bge-m3:latest")
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions(members, candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("unload", action.Command);
+        Assert.Equal("bge-m3:latest", action.Model);
+        Assert.Equal("kraken", action.ClientId);
     }
 }
