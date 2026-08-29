@@ -1906,8 +1906,10 @@ function warmthTip(clientId, model) {
 }
 
 function warmthModelBadge(clientId, model) {
-  const value = effectiveWarmth(clientId, model);
-  return `<span class="badge ${warmthBadgeClass(value)}" data-warmth-edit="model" data-client-id="${escapeAttr(clientId)}" data-model="${escapeAttr(model)}" data-warmth="${value}" title="${escapeAttr(warmthTip(clientId, model))}" aria-label="Edit warmth for ${escapeAttr(model)} on ${escapeAttr(clientId)}">${escapeHtml(model)}</span>`;
+  const client = (state.summary?.clients || []).find((item) => item.id === clientId);
+  const override = modelOverrideWarmth(client, model);
+  const value = clientWarmth(client) + override;
+  return `<span class="badge ${warmthBadgeClass(value)}" data-warmth-edit="model" data-client-id="${escapeAttr(clientId)}" data-model="${escapeAttr(model)}" data-warmth="${override}" title="${escapeAttr(warmthTip(clientId, model))}" aria-label="Edit warmth for ${escapeAttr(model)} on ${escapeAttr(clientId)}">${escapeHtml(model)}</span>`;
 }
 
 function modelClientsBadges(model, clients) {
