@@ -499,7 +499,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             args.Add("--group-add=video");
         }
 
-        if ((HasNvidiaGpu() || IsCudaDockerImage(_dockerImage)) && !HasRocmDevices())
+        if (IsCudaDockerImage(_dockerImage) || (HasNvidiaGpu() && !HasRocmDevices()))
         {
             args.Add("--gpus=all");
         }
