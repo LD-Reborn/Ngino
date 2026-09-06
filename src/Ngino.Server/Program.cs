@@ -220,7 +220,7 @@ app.Use(async (context, next) =>
 
     var ip = AuthRateLimiter.GetClientIp(context.Request);
     var identity = AuthRateLimiter.ResolveIdentity(context);
-    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip, identity);
+    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip, context.Request.Path, identity);
 
     if (!allowed)
     {

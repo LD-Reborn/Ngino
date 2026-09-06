@@ -68,7 +68,7 @@ internal sealed class AuthRateLimiter
         }
     }
 
-    public (bool Allowed, TimeSpan? RetryAfter, bool IsBlocked) CheckRateLimit(string ipAddress, AuthAttemptIdentity? identity = null)
+    public (bool Allowed, TimeSpan? RetryAfter, bool IsBlocked) CheckRateLimit(string ipAddress, string endpoint, AuthAttemptIdentity? identity = null)
     {
         if (!_attempts.TryGetValue(ipAddress, out var info))
         {
@@ -82,8 +82,8 @@ internal sealed class AuthRateLimiter
                 if (blockedUntil > DateTime.UtcNow)
                 {
                     _logger.LogWarning(
-                        "Rate limit: IP {IpAddress} is blocked, {Remaining} remaining{Identity}",
-                        ipAddress, blockedUntil - DateTime.UtcNow, BuildIdentitySuffix(identity));
+                        "Rate limit: IP {IpAddress} is blocked, {Remaining} remaining (last: {Endpoint}){Identity}",
+                        ipAddress, blockedUntil - DateTime.UtcNow, endpoint, BuildIdentitySuffix(identity));
                     return (false, blockedUntil - DateTime.UtcNow, true);
                 }
 
@@ -110,8 +110,8 @@ internal sealed class AuthRateLimiter
                 if (elapsed < wait)
                 {
                     _logger.LogWarning(
-                        "Rate limit: IP {IpAddress} must wait {Remaining} (attempt count: {Count}){Identity}",
-                        ipAddress, wait - elapsed, info.Count, BuildIdentitySuffix(identity));
+                        "Rate limit: IP {IpAddress} must wait {Remaining} (attempt count: {Count}, endpoint: {Endpoint}){Identity}",
+                        ipAddress, wait - elapsed, info.Count, endpoint, BuildIdentitySuffix(identity));
                     return (false, wait - elapsed, false);
                 }
             }
