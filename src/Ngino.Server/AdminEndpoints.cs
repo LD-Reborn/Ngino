@@ -65,6 +65,8 @@ internal static class AdminEndpoints
                 if (result.Succeeded)
                     return Results.Redirect(NormalizeLocalReturnUrl(returnUrl));
 
+                context.Items[AuthRateLimiter.UsernameItemKey] = username;
+
                 if (result.IsLockedOut)
                 {
                     var tokens = antiforgery.GetAndStoreTokens(context);

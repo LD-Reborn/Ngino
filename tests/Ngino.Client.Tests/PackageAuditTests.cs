@@ -63,14 +63,15 @@ public sealed class PackageAuditTests
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("json");
         startInfo.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start dotnet package audit.");
 
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+        var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+
         try
         {
             await process.WaitForExitAsync(timeout.Token);
@@ -89,10 +90,20 @@ public sealed class PackageAuditTests
             throw new TimeoutException("dotnet package audit did not finish within 2 minutes.");
         }
 
-        return new CommandResult(
-            process.ExitCode,
-            await outputTask,
-            await errorTask);
+        // The reads share the same timeout as the process wait. Without this, lingering
+        // MSBuild build-server nodes spawned by `dotnet list` keep the redirected pipes
+        // open and the reads would never observe end-of-stream.
+        try
+        {
+            return new CommandResult(
+                process.ExitCode,
+                await outputTask,
+                await errorTask);
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException("Reading dotnet package audit output did not finish within 2 minutes.");
+        }
     }
 
     private static void CollectVulnerablePackages(JsonElement element, List<string> findings)

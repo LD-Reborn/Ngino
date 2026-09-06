@@ -219,7 +219,8 @@ app.Use(async (context, next) =>
     }
 
     var ip = AuthRateLimiter.GetClientIp(context.Request);
-    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip);
+    var identity = AuthRateLimiter.ResolveIdentity(context);
+    var (allowed, retryAfter, _) = rateLimiter.CheckRateLimit(ip, identity);
 
     if (!allowed)
     {
@@ -248,9 +249,11 @@ app.Use(async (context, next) =>
 
     context.Response.OnStarting(() =>
     {
+        var identity = AuthRateLimiter.ResolveIdentity(context);
+
         if (context.Response.StatusCode is StatusCodes.Status401Unauthorized)
         {
-            rateLimiter.RecordFailure(ip, context.Request.Path);
+            rateLimiter.RecordFailure(ip, context.Request.Path, identity);
         }
         else if (context.Response.StatusCode is StatusCodes.Status302Found
             && context.Request.Path.StartsWithSegments("/api/admin"))
@@ -259,18 +262,18 @@ app.Use(async (context, next) =>
             if (location is not null
                 && location.Contains("/admin/login", StringComparison.OrdinalIgnoreCase))
             {
-                rateLimiter.RecordFailure(ip, context.Request.Path);
+                rateLimiter.RecordFailure(ip, context.Request.Path, identity);
             }
             else if (location is not null
                 && location.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
             {
-                rateLimiter.RecordSuccess(ip);
+                rateLimiter.RecordSuccess(ip, identity);
             }
         }
         else if (context.Response.StatusCode is >= 200 and < 300
             && context.Request.Path.StartsWithSegments("/api/admin"))
         {
-            rateLimiter.RecordSuccess(ip);
+            rateLimiter.RecordSuccess(ip, identity);
         }
 
         return Task.CompletedTask;
