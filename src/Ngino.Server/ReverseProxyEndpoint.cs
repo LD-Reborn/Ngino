@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ElmahCore;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Primitives;
 using Ngino.Protocol;
 
@@ -37,7 +38,7 @@ internal static class ReverseProxyEndpoint
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
         ManagementStore managementStore,
-        KeepaliveService keepaliveService)
+        [FromServices] KeepaliveService keepaliveService)
     {
         var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
         if (!auth.IsAuthorized)
@@ -171,7 +172,7 @@ internal static class ReverseProxyEndpoint
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
         ManagementStore managementStore,
-        KeepaliveService keepaliveService)
+        [FromServices] KeepaliveService keepaliveService)
     {
         var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
         if (!auth.IsAuthorized)

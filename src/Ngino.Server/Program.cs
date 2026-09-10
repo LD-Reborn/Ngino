@@ -24,7 +24,8 @@ builder.Services.AddSingleton<TunnelHub>();
 builder.Services.AddSingleton<EmbeddingCache>();
 builder.Services.AddSingleton<ManagementStore>();
 builder.Services.AddSingleton<AuthRateLimiter>();
-builder.Services.AddHostedService<KeepaliveService>();
+builder.Services.AddSingleton<KeepaliveService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<KeepaliveService>());
 builder.Services.AddElmah<ElmahCore.MySql.MySqlErrorLog>().Configure<ElmahOptions>(
     options => options.ConnectionString = builder.Configuration.GetConnectionString("ElmahConnection"));
 
