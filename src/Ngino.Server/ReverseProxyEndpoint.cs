@@ -36,7 +36,8 @@ internal static class ReverseProxyEndpoint
         ServerSettings settings,
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
-        ManagementStore managementStore)
+        ManagementStore managementStore,
+        KeepaliveService keepaliveService)
     {
         var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
         if (!auth.IsAuthorized)
@@ -99,6 +100,7 @@ internal static class ReverseProxyEndpoint
                 loggerFactory,
                 embeddingCache,
                 managementStore,
+                keepaliveService,
                 groupAccess,
                 auth.UserKeyId);
             return;
@@ -117,7 +119,15 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var requestedModel = embeddingRequest?.Model ?? await GetRequestedModelAsync(context.Request, proxyPath);
+        var (requestedModel, hasNumCtx) = embeddingRequest is not null
+            ? (embeddingRequest.Model, HasNumCtx: false)
+            : await GetRequestedModelAsync(context.Request, proxyPath);
+
+        if (hasNumCtx && requestedModel is not null)
+        {
+            keepaliveService.LockModel(requestedModel);
+        }
+
         var connection = hub.SelectBest(
             requestedModel,
             clientId => !managementStore.GetClientAccess(clientId).IsDisabled
@@ -160,7 +170,8 @@ internal static class ReverseProxyEndpoint
         ServerSettings settings,
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
-        ManagementStore managementStore)
+        ManagementStore managementStore,
+        KeepaliveService keepaliveService)
     {
         var auth = TokenAuthentication.Authorize(context.Request, settings, managementStore, allowQueryToken: false, allowPathToken: true);
         if (!auth.IsAuthorized)
@@ -204,6 +215,7 @@ internal static class ReverseProxyEndpoint
             loggerFactory,
             embeddingCache,
             managementStore,
+            keepaliveService,
             groupAccess,
             auth.UserKeyId);
     }
@@ -218,6 +230,7 @@ internal static class ReverseProxyEndpoint
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
         ManagementStore managementStore,
+        KeepaliveService keepaliveService,
         GroupAccess? groupAccess = null,
         string? userKeyId = null)
     {
@@ -244,12 +257,19 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
-        var requestedModel = embeddingRequest?.Model ?? await GetRequestedModelAsync(context.Request, clientPath);
+        var (requestedModel, hasNumCtx) = embeddingRequest is not null
+            ? (embeddingRequest.Model, HasNumCtx: false)
+            : await GetRequestedModelAsync(context.Request, clientPath);
         if (requestedModel is not null && groupAccess is not null && !groupAccess.IsClientModelAllowed(clientId, requestedModel))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             await context.Response.WriteAsync($"Access to model '{requestedModel}' on client '{clientId}' is not permitted.", context.RequestAborted);
             return;
+        }
+
+        if (hasNumCtx && requestedModel is not null)
+        {
+            keepaliveService.LockModel(requestedModel);
         }
 
         await ForwardAsync(
@@ -412,11 +432,11 @@ internal static class ReverseProxyEndpoint
             : $"Tunnel client '{clientId}' is disabled.{reason}";
     }
 
-    private static async Task<string?> GetRequestedModelAsync(HttpRequest request, PathString proxyPath)
+    private static async Task<(string? Model, bool HasNumCtx)> GetRequestedModelAsync(HttpRequest request, PathString proxyPath)
     {
         if (TryGetModelFromPath(proxyPath, out var pathModel))
         {
-            return pathModel;
+            return (pathModel, HasNumCtx: false);
         }
 
         if (request.Query.TryGetValue("model", out var queryValues))
@@ -424,13 +444,13 @@ internal static class ReverseProxyEndpoint
             var queryModel = queryValues.FirstOrDefault();
             if (!string.IsNullOrWhiteSpace(queryModel))
             {
-                return queryModel;
+                return (queryModel, HasNumCtx: false);
             }
         }
 
         if (!CanHaveBody(request) || (!IsJsonRequest(request) && !IsLikelyModelRequestPath(proxyPath)))
         {
-            return null;
+            return (null, HasNumCtx: false);
         }
 
         request.EnableBuffering();
@@ -441,13 +461,13 @@ internal static class ReverseProxyEndpoint
                 request.Body,
                 cancellationToken: request.HttpContext.RequestAborted);
 
-            return TryGetModelFromJson(document.RootElement, out var bodyModel)
-                ? bodyModel
-                : null;
+            return TryGetModelFromJson(document.RootElement, out var bodyModel, out var hasNumCtx)
+                ? (Model: bodyModel, HasNumCtx: hasNumCtx)
+                : (null, HasNumCtx: false);
         }
         catch (JsonException)
         {
-            return null;
+            return (null, HasNumCtx: false);
         }
         finally
         {
@@ -476,9 +496,10 @@ internal static class ReverseProxyEndpoint
         return !string.IsNullOrWhiteSpace(model);
     }
 
-    private static bool TryGetModelFromJson(JsonElement root, out string model)
+    private static bool TryGetModelFromJson(JsonElement root, out string model, out bool hasNumCtx)
     {
         model = "";
+        hasNumCtx = false;
 
         if (root.ValueKind != JsonValueKind.Object
             || !root.TryGetProperty("model", out var modelElement)
@@ -488,7 +509,16 @@ internal static class ReverseProxyEndpoint
         }
 
         model = modelElement.GetString() ?? "";
-        return !string.IsNullOrWhiteSpace(model);
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        hasNumCtx = root.TryGetProperty("options", out var optionsElement)
+            && optionsElement.ValueKind == JsonValueKind.Object
+            && optionsElement.TryGetProperty("num_ctx", out _);
+
+        return true;
     }
 
     private static bool IsJsonRequest(HttpRequest request)

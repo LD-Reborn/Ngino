@@ -1,13 +1,17 @@
+using System.Collections.Concurrent;
+
 namespace Ngino.Server;
 
 internal sealed class KeepaliveService : BackgroundService
 {
     private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ModelLockDuration = TimeSpan.FromSeconds(60);
 
     private readonly TunnelHub _hub;
     private readonly ManagementStore _managementStore;
     private readonly ILogger<KeepaliveService> _logger;
+    private readonly ConcurrentDictionary<string, DateTime> _modelLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public KeepaliveService(TunnelHub hub, ManagementStore managementStore, ILogger<KeepaliveService> logger)
     {
@@ -36,13 +40,11 @@ internal sealed class KeepaliveService : BackgroundService
     private async Task ApplyKeepaliveAsync(CancellationToken cancellationToken)
     {
         var members = _managementStore.ListAllGroupClients();
-        if (members.Count == 0)
-        {
-            return;
-        }
-
         var snapshots = _hub.ClientSnapshots;
-        if (snapshots.Count == 0)
+
+        CleanupLocks(snapshots);
+
+        if (members.Count == 0 || snapshots.Count == 0)
         {
             return;
         }
@@ -60,6 +62,16 @@ internal sealed class KeepaliveService : BackgroundService
         var actions = KeepaliveCoordinator.PlanActions(members, candidates);
         foreach (var action in actions)
         {
+            if (IsModelLocked(action.Model))
+            {
+                _logger.LogInformation(
+                    "Skipping keepalive {Command} for model {Model} on client {ClientId}: model is locked after a num_ctx request.",
+                    action.Command,
+                    action.Model,
+                    action.ClientId);
+                continue;
+            }
+
             try
             {
                 var connection = _hub.Get(action.ClientId);
@@ -95,6 +107,62 @@ internal sealed class KeepaliveService : BackgroundService
             }
         }
     }
+
+    internal void LockModel(string model, TimeSpan? duration = null)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return;
+        }
+
+        var normalized = model.Trim();
+        var expiresAt = DateTime.UtcNow + (duration ?? ModelLockDuration);
+        _modelLocks[normalized] = expiresAt;
+        _logger.LogInformation(
+            "Keepalive actions for model {Model} are locked until {ExpiresAt:O} after a num_ctx request.",
+            normalized,
+            expiresAt);
+    }
+
+    private void CleanupLocks(IReadOnlyList<TunnelClientSnapshot> snapshots)
+    {
+        if (_modelLocks.IsEmpty)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
+        var activeModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var snapshot in snapshots)
+        {
+            foreach (var activeModel in snapshot.ActiveModels)
+            {
+                activeModels.Add(activeModel);
+            }
+        }
+
+        foreach (var locked in _modelLocks.ToArray())
+        {
+            var expired = locked.Value <= now;
+            var loadedAgain = activeModels.Contains(locked.Key);
+            if (!expired && !loadedAgain)
+            {
+                continue;
+            }
+
+            if (_modelLocks.TryRemove(new KeyValuePair<string, DateTime>(locked.Key, locked.Value)))
+            {
+                _logger.LogInformation(
+                    "Released keepalive lock for model {Model} ({Reason}).",
+                    locked.Key,
+                    expired ? "expired" : "model is active again");
+            }
+        }
+    }
+
+    private bool IsModelLocked(string model) =>
+        !string.IsNullOrWhiteSpace(model) && _modelLocks.ContainsKey(model.Trim());
 
     private static IEnumerable<KeepaliveCandidate> BuildCandidates(
         TunnelClientSnapshot snapshot,
