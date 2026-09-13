@@ -157,6 +157,7 @@ Each model entry in a group carries a keepalive policy:
 - *Min always loaded instances*: how many warm instances of that model the rule wants kept loaded at all times. These are checked every 10 seconds.
 - *Max parallelism per client*: how many concurrent requests one client is presumably able to handle for the model.
 - *Parallelism headroom*: spare capacity (in number of parallel requests) reserved so traffic spikes can be absorbed without saturating the GPU.
+- *Default context length*: optional `num_ctx` sent to the upstream only when the model is loaded for keepalive. When unset, the upstream's default context length is used.
 
 Rules covering the same client/model cooperate instead of fighting:
 

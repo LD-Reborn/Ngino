@@ -42,6 +42,40 @@ public sealed class TunnelClientModelTests
         Assert.Equal(-1, document.RootElement.GetProperty("keep_alive").GetInt32());
     }
 
+    [Fact]
+    public async Task BuildModelCommandRequest_LoadMergesContextPayloadIntoOptions()
+    {
+        using var request = TunnelClient.BuildModelCommandRequest(
+            Upstream,
+            "load",
+            "qwen3.5:0.8b",
+            """{"options":{"num_ctx":8192}}""");
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("http://localhost:11434/api/generate", request.RequestUri!.AbsoluteUri);
+        Assert.Equal("qwen3.5:0.8b", document.RootElement.GetProperty("model").GetString());
+        Assert.False(document.RootElement.GetProperty("stream").GetBoolean());
+        Assert.Equal(-1, document.RootElement.GetProperty("keep_alive").GetInt32());
+        Assert.Equal(8192, document.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32());
+    }
+
+    [Fact]
+    public async Task BuildModelCommandRequest_UnloadIgnoresContextPayload()
+    {
+        using var request = TunnelClient.BuildModelCommandRequest(
+            Upstream,
+            "unload",
+            "qwen3.5:0.8b",
+            """{"options":{"num_ctx":8192}}""");
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+
+        Assert.Equal(0, document.RootElement.GetProperty("keep_alive").GetInt32());
+        Assert.False(document.RootElement.TryGetProperty("options", out _));
+    }
+
     [Theory]
     [InlineData("load", -1)]
     [InlineData("unload", 0)]

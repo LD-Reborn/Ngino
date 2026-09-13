@@ -214,6 +214,57 @@ public class KeepaliveCoordinatorTests
     }
 
     [Fact]
+    public void PlanActions_LoadCarriesDefaultContextLength()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", "client-1", "qwen3.5:0.8b", null, policy, DefaultContextLength: 8192);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "qwen3.5:0.8b", null)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("load", action.Command);
+        Assert.Equal(8192, action.DefaultContextLength);
+    }
+
+    [Fact]
+    public void PlanActions_LoadWithoutContextLengthCarriesNull()
+    {
+        var policy = new GroupClientKeepalivePolicy(1, 1, 1);
+        var member = new GroupClientInfo(1, "group-1", "client-1", "qwen3.5:0.8b", null, policy);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "qwen3.5:0.8b", null)
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("load", action.Command);
+        Assert.Null(action.DefaultContextLength);
+    }
+
+    [Fact]
+    public void PlanActions_UnloadNeverCarriesDefaultContextLength()
+    {
+        var policy = new GroupClientKeepalivePolicy(0, 1, 0);
+        var member = new GroupClientInfo(1, "group-1", "client-1", "qwen3.5:0.8b", null, policy, DefaultContextLength: 8192);
+        var candidates = new[]
+        {
+            new KeepaliveCandidate("client-1", "qwen3.5:0.8b", "qwen3.5:0.8b")
+        };
+
+        var actions = KeepaliveCoordinator.PlanActions([member], candidates);
+
+        var action = Assert.Single(actions);
+        Assert.Equal("unload", action.Command);
+        Assert.Null(action.DefaultContextLength);
+    }
+
+    [Fact]
     public void PlanActions_GrowPrefersWarmestSlot()
     {
         var policy = new GroupClientKeepalivePolicy(1, 1, 1);

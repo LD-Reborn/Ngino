@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace Ngino.Server;
 
@@ -83,7 +84,7 @@ internal sealed class KeepaliveService : BackgroundService
                 var response = await connection.SendModelCommandAsync(
                     action.Command,
                     action.Model,
-                    payloadJson: null,
+                    BuildLoadPayload(action),
                     CommandTimeout,
                     cancellationToken);
 
@@ -163,6 +164,16 @@ internal sealed class KeepaliveService : BackgroundService
 
     private bool IsModelLocked(string model) =>
         !string.IsNullOrWhiteSpace(model) && _modelLocks.ContainsKey(model.Trim());
+
+    private static string? BuildLoadPayload(KeepaliveAction action)
+    {
+        if (action.DefaultContextLength is not > 0)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(new { options = new { num_ctx = action.DefaultContextLength.Value } });
+    }
 
     private static IEnumerable<KeepaliveCandidate> BuildCandidates(
         TunnelClientSnapshot snapshot,

@@ -421,7 +421,8 @@ internal static class AdminEndpoints
                     request.ClientPattern,
                     request.KeepaliveInstancesToKeepAlive,
                     request.KeepaliveMaxParallelismPerClient,
-                    request.KeepaliveParallelismHeadroom);
+                    request.KeepaliveParallelismHeadroom,
+                    request.DefaultContextLength);
                 return Results.Json(member);
             }
             catch (ArgumentException exception)
@@ -949,7 +950,8 @@ internal sealed record AddGroupClientRequest(
     string? ClientPattern,
     int? KeepaliveInstancesToKeepAlive,
     int? KeepaliveMaxParallelismPerClient,
-    int? KeepaliveParallelismHeadroom);
+    int? KeepaliveParallelismHeadroom,
+    int? DefaultContextLength);
 
 internal sealed record SetUserKeyGroupsRequest(IReadOnlyList<string>? GroupIds);
 
