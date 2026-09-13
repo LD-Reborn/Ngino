@@ -151,10 +151,33 @@ internal static class KeepaliveCoordinator
             .OrderBy(slot => slot.ClientId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(slot => slot.Model, StringComparer.OrdinalIgnoreCase))
         {
-            actions.Add(new KeepaliveAction(slot.ClientId, "load", slot.Model));
+            actions.Add(new KeepaliveAction(
+                slot.ClientId,
+                "load",
+                slot.Model,
+                ResolveDefaultContextLength(slot)));
         }
 
         return actions;
+
+        int? ResolveDefaultContextLength(Slot slot)
+        {
+            if (!coveringRows.TryGetValue(slot.Key, out var covering))
+            {
+                return null;
+            }
+
+            foreach (var rowId in covering)
+            {
+                var row = rowsById[rowId];
+                if (row.DefaultContextLength is > 0)
+                {
+                    return row.DefaultContextLength;
+                }
+            }
+
+            return null;
+        }
     }
 
     private static int TargetInstances(GroupClientInfo member) =>
@@ -252,4 +275,5 @@ internal sealed record KeepaliveCandidate(
 internal sealed record KeepaliveAction(
     string ClientId,
     string Command,
-    string Model);
+    string Model,
+    int? DefaultContextLength = null);

@@ -948,7 +948,8 @@ internal sealed class ManagementStore
                 SELECT id, group_id, client_id, model, client_pattern,
                        keepalive_instances_to_keep_alive,
                        keepalive_max_parallelism_per_client,
-                       keepalive_parallelism_headroom
+                       keepalive_parallelism_headroom,
+                       default_context_length
                 FROM group_members
                 WHERE group_id = $group_id
                 ORDER BY client_id, model, client_pattern
@@ -974,7 +975,8 @@ internal sealed class ManagementStore
                 SELECT id, group_id, client_id, model, client_pattern,
                        keepalive_instances_to_keep_alive,
                        keepalive_max_parallelism_per_client,
-                       keepalive_parallelism_headroom
+                       keepalive_parallelism_headroom,
+                       default_context_length
                 FROM group_members
                 ORDER BY client_id, model, client_pattern
                 """;
@@ -995,7 +997,8 @@ internal sealed class ManagementStore
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
-                ReadKeepalivePolicy(reader, 5, 6, 7)));
+                ReadKeepalivePolicy(reader, 5, 6, 7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8)));
         }
 
         return result;
@@ -1008,7 +1011,8 @@ internal sealed class ManagementStore
         string? clientPattern,
         int? keepaliveInstancesToKeepAlive,
         int? keepaliveMaxParallelismPerClient,
-        int? keepaliveParallelismHeadroom)
+        int? keepaliveParallelismHeadroom,
+        int? defaultContextLength)
     {
         EnsureAvailable();
 
@@ -1039,6 +1043,8 @@ internal sealed class ManagementStore
             keepaliveMaxParallelismPerClient,
             keepaliveParallelismHeadroom);
 
+        var normalizedDefaultContextLength = defaultContextLength is > 0 ? defaultContextLength : null;
+
         lock (_lock)
         {
             using var connection = OpenConnection();
@@ -1051,7 +1057,8 @@ internal sealed class ManagementStore
                     client_pattern,
                     keepalive_instances_to_keep_alive,
                     keepalive_max_parallelism_per_client,
-                    keepalive_parallelism_headroom)
+                    keepalive_parallelism_headroom,
+                    default_context_length)
                 VALUES (
                     $group_id,
                     $client_id,
@@ -1059,7 +1066,8 @@ internal sealed class ManagementStore
                     $client_pattern,
                     $keepalive_instances_to_keep_alive,
                     $keepalive_max_parallelism_per_client,
-                    $keepalive_parallelism_headroom)
+                    $keepalive_parallelism_headroom,
+                    $default_context_length)
                 """;
             command.Parameters.AddWithValue("$group_id", groupId);
             command.Parameters.AddWithValue("$client_id", string.IsNullOrWhiteSpace(clientId) ? DBNull.Value : clientId);
@@ -1068,12 +1076,13 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$keepalive_instances_to_keep_alive", policy.InstancesToKeepAlive);
             command.Parameters.AddWithValue("$keepalive_max_parallelism_per_client", policy.MaxParallelismPerClient);
             command.Parameters.AddWithValue("$keepalive_parallelism_headroom", policy.ParallelismHeadroom);
+            command.Parameters.AddWithValue("$default_context_length", (object?)normalizedDefaultContextLength ?? DBNull.Value);
             command.ExecuteNonQuery();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
             var insertedId = (long)idCommand.ExecuteScalar()!;
-            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern, policy);
+            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern, policy, normalizedDefaultContextLength);
         }
     }
 
@@ -2353,7 +2362,8 @@ internal sealed class ManagementStore
                     client_pattern TEXT NULL,
                     keepalive_instances_to_keep_alive INTEGER NOT NULL DEFAULT 1,
                     keepalive_max_parallelism_per_client INTEGER NOT NULL DEFAULT 1,
-                    keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1
+                    keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1,
+                    default_context_length INTEGER NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_group_members_group_id
@@ -2403,6 +2413,21 @@ internal sealed class ManagementStore
                 using var addKeepaliveHeadroom = connection.CreateCommand();
                 addKeepaliveHeadroom.CommandText = "ALTER TABLE group_members ADD COLUMN keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1";
                 addKeepaliveHeadroom.ExecuteNonQuery();
+            }
+        }
+
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('group_members') WHERE name = 'default_context_length'
+                """;
+            var hasDefaultContextLengthColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasDefaultContextLengthColumn)
+            {
+                using var addDefaultContextLength = connection.CreateCommand();
+                addDefaultContextLength.CommandText = "ALTER TABLE group_members ADD COLUMN default_context_length INTEGER NULL";
+                addDefaultContextLength.ExecuteNonQuery();
             }
         }
 
@@ -2874,7 +2899,8 @@ internal sealed record GroupClientInfo(
     string? ClientId,
     string? Model,
     string? ClientPattern,
-    GroupClientKeepalivePolicy? KeepalivePolicy = null);
+    GroupClientKeepalivePolicy? KeepalivePolicy = null,
+    int? DefaultContextLength = null);
 
 internal sealed record GroupClientKeepalivePolicy(
     int InstancesToKeepAlive,

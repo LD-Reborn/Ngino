@@ -363,12 +363,16 @@ content.addEventListener("submit", async (event) => {
           return;
         }
       }
+      const defaultContextLength = data.defaultContextLength ? parseInt(data.defaultContextLength, 10) || null : null;
       const body = {
         model,
         keepaliveInstancesToKeepAlive: parseInt(data.keepaliveInstancesToKeepAlive, 10) || 0,
         keepaliveMaxParallelismPerClient: parseInt(data.keepaliveMaxParallelismPerClient, 10) || 1,
         keepaliveParallelismHeadroom: parseInt(data.keepaliveParallelismHeadroom, 10) || 0
       };
+      if (defaultContextLength !== null) {
+        body.defaultContextLength = defaultContextLength;
+      }
 
       await api(`/groups/${encodeURIComponent(groupId)}/clients`, {
         method: "POST",
@@ -1186,6 +1190,10 @@ function renderGroupDetail() {
             ${renderFieldLabel("addModelKeepaliveHeadroom", "Parallelism headroom", "How much spare parallelism to leave unused so traffic spikes can be absorbed without saturating the GPU. A larger headroom makes routing more conservative. Set to 0 for no headroom.")}
             <input class="input" id="addModelKeepaliveHeadroom" name="keepaliveParallelismHeadroom" type="number" min="0" step="1" value="0">
           </div>
+          <div class="field">
+            ${renderFieldLabel("addModelDefaultContextLength", "Default context length", "Optional num_ctx used when the model is loaded for keepalive. When set, the load request sent upstream includes this context length. Leave empty to use the upstream default.")}
+            <input class="input" id="addModelDefaultContextLength" name="defaultContextLength" type="number" min="1" step="1">
+          </div>
           <button class="button" type="submit">Add model</button>
         </form>
         <div class="cell-sub" style="margin-top:8px">The model is served to all clients in the group. A regex pattern is also allowed (e.g. <span class="code-inline">bge-m3.*</span>). Keepalive settings control warm instances and parallelism.</div>
@@ -1353,6 +1361,7 @@ function groupModelsTable(models, groupId) {
         }
       </td>
       <td>${formatKeepalivePolicy(model.keepalivePolicy)}</td>
+      <td>${model.defaultContextLength ? `<div class="cell-main">${escapeHtml(String(model.defaultContextLength))}</div>` : `<div class="cell-sub">Default</div>`}</td>
       <td>
         <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${model.id}">Remove</button>
       </td>
@@ -1365,6 +1374,7 @@ function groupModelsTable(models, groupId) {
         <tr>
           <th>Model</th>
           <th>Keepalive policy</th>
+          <th>Default context length</th>
           <th></th>
         </tr>
       </thead>

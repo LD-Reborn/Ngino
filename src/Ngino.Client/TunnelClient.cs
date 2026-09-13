@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Ngino.Protocol;
@@ -483,7 +484,7 @@ internal sealed class TunnelClient
                         "Unable to load model '{Model}' via llama.cpp. Falling back to Ollama upstream.",
                         modelName);
 
-                    using var fallbackRequest = BuildModelCommandRequest(_options.Upstream, "load", modelName);
+                    using var fallbackRequest = BuildModelCommandRequest(_options.Upstream, "load", modelName, message.PayloadJson);
                     using var fallbackResponse = await _httpClient.SendAsync(
                         fallbackRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
                     var fallbackBody = await fallbackResponse.Content.ReadAsByteArrayAsync(cancellationToken);
@@ -625,10 +626,10 @@ internal sealed class TunnelClient
 
     private HttpRequestMessage BuildModelCommandRequest(TunnelMessage message)
     {
-        return BuildModelCommandRequest(_options.Upstream, message.Command, message.Model);
+        return BuildModelCommandRequest(_options.Upstream, message.Command, message.Model, message.PayloadJson);
     }
 
-    internal static HttpRequestMessage BuildModelCommandRequest(Uri upstream, string? command, string? modelName)
+    internal static HttpRequestMessage BuildModelCommandRequest(Uri upstream, string? command, string? modelName, string? payloadJson = null)
     {
         if (string.IsNullOrWhiteSpace(modelName))
         {
@@ -650,7 +651,7 @@ internal sealed class TunnelClient
             },
             "load" => new HttpRequestMessage(HttpMethod.Post, new Uri(upstream, "/api/generate"))
             {
-                Content = JsonContent(new { model, stream = false, keep_alive = -1 })
+                Content = JsonContent(BuildLoadBody(model, payloadJson))
             },
             "unload" => new HttpRequestMessage(HttpMethod.Post, new Uri(upstream, "/api/generate"))
             {
@@ -662,6 +663,37 @@ internal sealed class TunnelClient
             },
             _ => throw new InvalidOperationException($"Unsupported model command '{command}'.")
         };
+    }
+
+    private static object BuildLoadBody(string model, string? payloadJson)
+    {
+        var node = new JsonObject
+        {
+            ["model"] = model,
+            ["stream"] = false,
+            ["keep_alive"] = -1
+        };
+
+        if (!string.IsNullOrWhiteSpace(payloadJson))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(payloadJson);
+                if (document.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in document.RootElement.EnumerateObject())
+                    {
+                        node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Ignore malformed payloads; the default load is used.
+            }
+        }
+
+        return node;
     }
 
     internal static HttpRequestMessage BuildEmbeddingModelCommandRequest(Uri upstream, string? command, string? modelName)
