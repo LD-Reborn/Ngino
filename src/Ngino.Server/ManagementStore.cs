@@ -1110,11 +1110,11 @@ internal sealed class ManagementStore
         }
     }
 
-    public bool ShouldStripNumCtx(string? clientId, string? model)
+    public NumCtxHandling GetNumCtxHandling(string? clientId, string? model)
     {
         if (!_isAvailable || string.IsNullOrWhiteSpace(model))
         {
-            return false;
+            return NumCtxHandling.None;
         }
 
         lock (_lock)
@@ -1122,7 +1122,7 @@ internal sealed class ManagementStore
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
-                SELECT client_id, model, client_pattern
+                SELECT client_id, model, client_pattern, default_context_length
                 FROM group_members
                 WHERE disallow_context_change = 1
                 """;
@@ -1133,6 +1133,7 @@ internal sealed class ManagementStore
                 var memberClientId = reader.IsDBNull(0) ? null : reader.GetString(0);
                 var memberModel = reader.IsDBNull(1) ? null : reader.GetString(1);
                 var memberPattern = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var defaultContextLength = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
 
                 if (string.IsNullOrWhiteSpace(memberModel))
                 {
@@ -1142,16 +1143,16 @@ internal sealed class ManagementStore
                         continue;
                     }
 
-                    return true;
+                    return new NumCtxHandling(true, defaultContextLength);
                 }
 
                 if (GroupAccess.ModelSelectorMatches(memberModel, model))
                 {
-                    return true;
+                    return new NumCtxHandling(true, defaultContextLength);
                 }
             }
 
-            return false;
+            return NumCtxHandling.None;
         }
     }
 
@@ -2970,6 +2971,11 @@ internal sealed record GroupClientInfo(
     GroupClientKeepalivePolicy? KeepalivePolicy = null,
     int? DefaultContextLength = null,
     bool DisallowContextChange = false);
+
+internal sealed record NumCtxHandling(bool ShouldStrip, int? ReplacementContextLength)
+{
+    public static NumCtxHandling None { get; } = new(false, null);
+}
 
 internal sealed record GroupClientKeepalivePolicy(
     int InstancesToKeepAlive,

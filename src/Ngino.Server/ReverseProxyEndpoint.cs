@@ -156,7 +156,7 @@ internal static class ReverseProxyEndpoint
             connection,
             pathAndQuery,
             requestedModel,
-            managementStore.ShouldStripNumCtx(connection.ClientId, requestedModel),
+            managementStore.GetNumCtxHandling(connection.ClientId, requestedModel),
             settings,
             loggerFactory,
             embeddingCache,
@@ -280,7 +280,7 @@ internal static class ReverseProxyEndpoint
             connection,
             pathAndQuery,
             requestedModel,
-            managementStore.ShouldStripNumCtx(clientId, requestedModel),
+            managementStore.GetNumCtxHandling(clientId, requestedModel),
             settings,
             loggerFactory,
             embeddingCache,
@@ -557,7 +557,7 @@ internal static class ReverseProxyEndpoint
         TunnelConnection connection,
         string pathAndQuery,
         string? requestedModel,
-        bool stripNumCtx,
+        NumCtxHandling numCtxHandling,
         ServerSettings settings,
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
@@ -593,9 +593,13 @@ internal static class ReverseProxyEndpoint
                 requestMessage.Headers.Add(new HeaderPair(ProtocolConstants.ModelHeader, requestedModel));
             }
 
-            if (stripNumCtx && hasBody)
+            if (numCtxHandling.ShouldStrip && hasBody
+                && (embeddingRequest is null || numCtxHandling.ReplacementContextLength is null))
             {
-                if (await TryStripNumCtxAsync(context.Request, context.RequestAborted))
+                if (await ApplyNumCtxAsync(
+                        context.Request,
+                        numCtxHandling.ReplacementContextLength,
+                        context.RequestAborted))
                 {
                     PatchForwardedContentLength(requestMessage.Headers, context.Request.ContentLength);
                 }
@@ -739,7 +743,10 @@ internal static class ReverseProxyEndpoint
         return memory.ToArray();
     }
 
-    private static async Task<bool> TryStripNumCtxAsync(HttpRequest request, CancellationToken cancellationToken)
+    private static async Task<bool> ApplyNumCtxAsync(
+        HttpRequest request,
+        int? replacementContextLength,
+        CancellationToken cancellationToken)
     {
         if (!request.Body.CanSeek)
         {
@@ -753,10 +760,16 @@ internal static class ReverseProxyEndpoint
         {
             document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("options", out var options)
-                || options.ValueKind != JsonValueKind.Object
-                || !options.TryGetProperty("num_ctx", out _))
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var optionsExists = root.TryGetProperty("options", out var options);
+            var optionsIsObject = optionsExists && options.ValueKind == JsonValueKind.Object;
+            var hasNumCtx = optionsIsObject && options.TryGetProperty("num_ctx", out _);
+
+            if (replacementContextLength is null && !hasNumCtx)
             {
                 return false;
             }
@@ -765,26 +778,66 @@ internal static class ReverseProxyEndpoint
             using (var writer = new Utf8JsonWriter(buffer))
             {
                 writer.WriteStartObject();
+
                 foreach (var property in root.EnumerateObject())
                 {
-                    if (property.NameEquals("options"))
-                    {
-                        writer.WritePropertyName("options");
-                        writer.WriteStartObject();
-                        foreach (var option in options.EnumerateObject())
-                        {
-                            if (!option.NameEquals("num_ctx"))
-                            {
-                                option.WriteTo(writer);
-                            }
-                        }
-                        writer.WriteEndObject();
-                    }
-                    else
+                    if (!property.NameEquals("options"))
                     {
                         property.WriteTo(writer);
+                        continue;
                     }
+
+                    if (!optionsIsObject)
+                    {
+                        if (replacementContextLength is not int replacement)
+                        {
+                            property.WriteTo(writer);
+                            continue;
+                        }
+
+                        writer.WritePropertyName("options");
+                        writer.WriteStartObject();
+                        writer.WritePropertyName("num_ctx");
+                        writer.WriteNumberValue(replacement);
+                        writer.WriteEndObject();
+                        continue;
+                    }
+
+                    writer.WritePropertyName("options");
+                    writer.WriteStartObject();
+                    foreach (var option in options.EnumerateObject())
+                    {
+                        if (!option.NameEquals("num_ctx"))
+                        {
+                            option.WriteTo(writer);
+                            continue;
+                        }
+
+                        if (replacementContextLength is int replacement)
+                        {
+                            writer.WritePropertyName("num_ctx");
+                            writer.WriteNumberValue(replacement);
+                        }
+                    }
+
+                    if (replacementContextLength is int injected && !hasNumCtx)
+                    {
+                        writer.WritePropertyName("num_ctx");
+                        writer.WriteNumberValue(injected);
+                    }
+
+                    writer.WriteEndObject();
                 }
+
+                if (!optionsExists && replacementContextLength is int injectedTopLevel)
+                {
+                    writer.WritePropertyName("options");
+                    writer.WriteStartObject();
+                    writer.WritePropertyName("num_ctx");
+                    writer.WriteNumberValue(injectedTopLevel);
+                    writer.WriteEndObject();
+                }
+
                 writer.WriteEndObject();
             }
 

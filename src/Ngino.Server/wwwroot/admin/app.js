@@ -1198,7 +1198,7 @@ function renderGroupDetail() {
               <input type="checkbox" id="addModelDisallowContextChange" name="disallowContextChange">
               <span>Disallow context length change</span>
             </label>
-            <div class="cell-sub">Removes num_ctx from the options of incoming requests so the model always loads with the same context length and is not unloaded or reloaded with a different context by opinionated harnesses.</div>
+            <div class="cell-sub">When enabled, the configured Default context length is forced on every incoming request (replacing the harness's num_ctx, or injecting it when absent) so the model always loads with the same context and is not unloaded/reloaded by opinionated harnesses. Without a Default context length, num_ctx is only stripped.</div>
           </div>
           <button class="button" type="submit">Add model</button>
         </form>

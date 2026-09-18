@@ -158,7 +158,7 @@ Each model entry in a group carries a keepalive policy:
 - *Max parallelism per client*: how many concurrent requests one client is presumably able to handle for the model.
 - *Parallelism headroom*: spare capacity (in number of parallel requests) reserved so traffic spikes can be absorbed without saturating the GPU.
 - *Default context length*: optional `num_ctx` sent to the upstream only when the model is loaded for keepalive. When unset, the upstream's default context length is used.
-- *Disallow context length change*: strips `num_ctx` from the `options` of incoming requests before they are forwarded upstream. This keeps the model loaded at a single, stable context length and prevents opinionated harnesses from unloading and reloading it with a different context.
+- *Disallow context length change*: strips `num_ctx` from the `options` of incoming requests before they are forwarded upstream. When a *default context length* is also set, the configured value is written into the `options` instead (replacing the harness's `num_ctx`, or injecting it when absent), so the model always loads with the same context length and opinionated harnesses cannot unload and reload it with a different context.
 
 Rules covering the same client/model cooperate instead of fighting:
 
