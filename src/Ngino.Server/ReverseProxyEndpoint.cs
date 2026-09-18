@@ -114,6 +114,12 @@ internal static class ReverseProxyEndpoint
             return;
         }
 
+        if (IsOpenAIModelsRequest(context.Request, proxyPath))
+        {
+            await HandleOpenAIModelsAsync(context, hub, managementStore, groupAccess);
+            return;
+        }
+
         var embeddingRequest = await embeddingCache.TryReadRequestAsync(context.Request, proxyPath);
         if (embeddingRequest is not null
             && await embeddingCache.TryWriteCachedResponseAsync(context, embeddingRequest))
@@ -373,6 +379,10 @@ internal static class ReverseProxyEndpoint
         HttpMethods.IsGet(request.Method)
         && string.Equals(proxyPath.Value, "/api/tags", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsOpenAIModelsRequest(HttpRequest request, PathString proxyPath) =>
+        HttpMethods.IsGet(request.Method)
+        && string.Equals(proxyPath.Value, "/v1/models", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsVersionRequest(HttpRequest request, PathString proxyPath) =>
         HttpMethods.IsGet(request.Method)
         && string.Equals(proxyPath.Value, "/api/version", StringComparison.OrdinalIgnoreCase);
@@ -429,6 +439,40 @@ internal static class ReverseProxyEndpoint
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.ContentType = "application/json";
         await context.Response.WriteAsJsonAsync(response, context.RequestAborted);
+    }
+
+    private static async Task HandleOpenAIModelsAsync(
+        HttpContext context,
+        TunnelHub hub,
+        ManagementStore managementStore,
+        GroupAccess groupAccess)
+    {
+        var models = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var client in hub.ClientSnapshots)
+        {
+            foreach (var model in client.Models)
+            {
+                if (groupAccess.IsClientModelAllowed(client.Id, model))
+                {
+                    models.Add(model);
+                }
+            }
+        }
+
+        var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var data = models
+            .Select(model => new
+            {
+                id = model,
+                @object = "model",
+                created,
+                owned_by = "library"
+            });
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new { @object = "list", data }, context.RequestAborted);
     }
 
     private static string GetNoRouteMessage(string? requestedModel) =>
