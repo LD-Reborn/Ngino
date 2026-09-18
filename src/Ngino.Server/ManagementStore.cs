@@ -812,6 +812,19 @@ internal sealed class ManagementStore
         }
     }
 
+    public string? GetUserKeyPrefix(string? userKeyId)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(userKeyId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            return _userKeysByHash.Values.FirstOrDefault(key => key.Id == userKeyId)?.KeyPrefix;
+        }
+    }
+
     public IReadOnlyList<GroupInfo> ListGroups()
     {
         if (!_isAvailable)

@@ -458,7 +458,7 @@ internal static class ReverseProxyEndpoint
                 "No tunnel client connected; rejecting {Method} {PathAndQuery} (user key {UserKeyId}).",
                 method,
                 pathAndQuery,
-                userKeyId ?? "<none>");
+                LabelUserKey(userKeyId, managementStore));
             return;
         }
 
@@ -502,9 +502,22 @@ internal static class ReverseProxyEndpoint
             "No tunnel client available for {Method} {PathAndQuery} (user key {UserKeyId}, requested model '{RequestedModel}'): evaluated [{EvaluatedClients}].",
             method,
             pathAndQuery,
-            userKeyId ?? "<none>",
-            requestedModel ?? "",
+            LabelUserKey(userKeyId, managementStore),
+            requestedModel ?? "<none>",
             string.Join(", ", evaluated));
+    }
+
+    private static string LabelUserKey(string? userKeyId, ManagementStore managementStore)
+    {
+        if (string.IsNullOrWhiteSpace(userKeyId))
+        {
+            return "<none>";
+        }
+
+        var prefix = managementStore.GetUserKeyPrefix(userKeyId);
+        return string.IsNullOrWhiteSpace(prefix)
+            ? userKeyId
+            : $"{prefix}/{userKeyId}";
     }
 
     private static string GetClientDisabledMessage(string clientId, ClientAccess access)
