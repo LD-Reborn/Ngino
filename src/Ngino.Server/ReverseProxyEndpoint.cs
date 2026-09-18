@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using ElmahCore;
 using Microsoft.AspNetCore.Http.Features;
@@ -155,6 +156,7 @@ internal static class ReverseProxyEndpoint
             connection,
             pathAndQuery,
             requestedModel,
+            managementStore.ShouldStripNumCtx(connection.ClientId, requestedModel),
             settings,
             loggerFactory,
             embeddingCache,
@@ -278,6 +280,7 @@ internal static class ReverseProxyEndpoint
             connection,
             pathAndQuery,
             requestedModel,
+            managementStore.ShouldStripNumCtx(clientId, requestedModel),
             settings,
             loggerFactory,
             embeddingCache,
@@ -554,6 +557,7 @@ internal static class ReverseProxyEndpoint
         TunnelConnection connection,
         string pathAndQuery,
         string? requestedModel,
+        bool stripNumCtx,
         ServerSettings settings,
         ILoggerFactory loggerFactory,
         EmbeddingCache embeddingCache,
@@ -587,6 +591,14 @@ internal static class ReverseProxyEndpoint
             {
                 requestMessage.Headers ??= [];
                 requestMessage.Headers.Add(new HeaderPair(ProtocolConstants.ModelHeader, requestedModel));
+            }
+
+            if (stripNumCtx && hasBody)
+            {
+                if (await TryStripNumCtxAsync(context.Request, context.RequestAborted))
+                {
+                    PatchForwardedContentLength(requestMessage.Headers, context.Request.ContentLength);
+                }
             }
 
             await connection.SendAsync(requestMessage, context.RequestAborted);
@@ -727,6 +739,74 @@ internal static class ReverseProxyEndpoint
         return memory.ToArray();
     }
 
+    private static async Task<bool> TryStripNumCtxAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.Body.CanSeek)
+        {
+            return false;
+        }
+
+        request.Body.Position = 0;
+
+        JsonDocument? document = null;
+        try
+        {
+            document = await JsonDocument.ParseAsync(request.Body, cancellationToken: cancellationToken);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("options", out var options)
+                || options.ValueKind != JsonValueKind.Object
+                || !options.TryGetProperty("num_ctx", out _))
+            {
+                return false;
+            }
+
+            using var buffer = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                writer.WriteStartObject();
+                foreach (var property in root.EnumerateObject())
+                {
+                    if (property.NameEquals("options"))
+                    {
+                        writer.WritePropertyName("options");
+                        writer.WriteStartObject();
+                        foreach (var option in options.EnumerateObject())
+                        {
+                            if (!option.NameEquals("num_ctx"))
+                            {
+                                option.WriteTo(writer);
+                            }
+                        }
+                        writer.WriteEndObject();
+                    }
+                    else
+                    {
+                        property.WriteTo(writer);
+                    }
+                }
+                writer.WriteEndObject();
+            }
+
+            var bytes = buffer.ToArray();
+            request.Body = new MemoryStream(bytes);
+            request.ContentLength = bytes.Length;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        finally
+        {
+            document?.Dispose();
+            if (request.Body.CanSeek)
+            {
+                request.Body.Position = 0;
+            }
+        }
+    }
+
     private static async Task ForwardRequestBodyAsync(
         HttpRequest request,
         TunnelConnection connection,
@@ -784,6 +864,16 @@ internal static class ReverseProxyEndpoint
         }
 
         return request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding");
+    }
+
+    private static void PatchForwardedContentLength(List<HeaderPair> headers, long? contentLength)
+    {
+        headers.RemoveAll(header => string.Equals(header.Name, "Content-Length", StringComparison.OrdinalIgnoreCase));
+
+        if (contentLength is > 0)
+        {
+            headers.Add(new HeaderPair("Content-Length", contentLength.Value.ToString(CultureInfo.InvariantCulture)));
+        }
     }
 
     private static List<HeaderPair> CollectRequestHeaders(

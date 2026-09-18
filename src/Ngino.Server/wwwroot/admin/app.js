@@ -368,7 +368,8 @@ content.addEventListener("submit", async (event) => {
         model,
         keepaliveInstancesToKeepAlive: parseInt(data.keepaliveInstancesToKeepAlive, 10) || 0,
         keepaliveMaxParallelismPerClient: parseInt(data.keepaliveMaxParallelismPerClient, 10) || 1,
-        keepaliveParallelismHeadroom: parseInt(data.keepaliveParallelismHeadroom, 10) || 0
+        keepaliveParallelismHeadroom: parseInt(data.keepaliveParallelismHeadroom, 10) || 0,
+        disallowContextChange: data.disallowContextChange === "on"
       };
       if (defaultContextLength !== null) {
         body.defaultContextLength = defaultContextLength;
@@ -1193,6 +1194,11 @@ function renderGroupDetail() {
           <div class="field">
             ${renderFieldLabel("addModelDefaultContextLength", "Default context length", "Optional num_ctx used when the model is loaded for keepalive. When set, the load request sent upstream includes this context length. Leave empty to use the upstream default.")}
             <input class="input" id="addModelDefaultContextLength" name="defaultContextLength" type="number" min="1" step="1">
+            <label class="context-lock-toggle" for="addModelDisallowContextChange">
+              <input type="checkbox" id="addModelDisallowContextChange" name="disallowContextChange">
+              <span>Disallow context length change</span>
+            </label>
+            <div class="cell-sub">Removes num_ctx from the options of incoming requests so the model always loads with the same context length and is not unloaded or reloaded with a different context by opinionated harnesses.</div>
           </div>
           <button class="button" type="submit">Add model</button>
         </form>
@@ -1361,7 +1367,10 @@ function groupModelsTable(models, groupId) {
         }
       </td>
       <td>${formatKeepalivePolicy(model.keepalivePolicy)}</td>
-      <td>${model.defaultContextLength ? `<div class="cell-main">${escapeHtml(String(model.defaultContextLength))}</div>` : `<div class="cell-sub">Default</div>`}</td>
+      <td>
+        ${model.defaultContextLength ? `<div class="cell-main">${escapeHtml(String(model.defaultContextLength))}</div>` : `<div class="cell-sub">Default</div>`}
+        ${model.disallowContextChange ? `<div class="cell-sub">Context length fixed</div>` : ""}
+      </td>
       <td>
         <button class="button danger" data-action="remove-client" data-group-id="${escapeAttr(groupId)}" data-member-id="${model.id}">Remove</button>
       </td>

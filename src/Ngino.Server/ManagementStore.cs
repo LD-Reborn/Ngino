@@ -949,7 +949,8 @@ internal sealed class ManagementStore
                        keepalive_instances_to_keep_alive,
                        keepalive_max_parallelism_per_client,
                        keepalive_parallelism_headroom,
-                       default_context_length
+                       default_context_length,
+                       disallow_context_change
                 FROM group_members
                 WHERE group_id = $group_id
                 ORDER BY client_id, model, client_pattern
@@ -976,7 +977,8 @@ internal sealed class ManagementStore
                        keepalive_instances_to_keep_alive,
                        keepalive_max_parallelism_per_client,
                        keepalive_parallelism_headroom,
-                       default_context_length
+                       default_context_length,
+                       disallow_context_change
                 FROM group_members
                 ORDER BY client_id, model, client_pattern
                 """;
@@ -998,7 +1000,8 @@ internal sealed class ManagementStore
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 ReadKeepalivePolicy(reader, 5, 6, 7),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8)));
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.GetBoolean(9)));
         }
 
         return result;
@@ -1012,7 +1015,8 @@ internal sealed class ManagementStore
         int? keepaliveInstancesToKeepAlive,
         int? keepaliveMaxParallelismPerClient,
         int? keepaliveParallelismHeadroom,
-        int? defaultContextLength)
+        int? defaultContextLength,
+        bool disallowContextChange = false)
     {
         EnsureAvailable();
 
@@ -1058,7 +1062,8 @@ internal sealed class ManagementStore
                     keepalive_instances_to_keep_alive,
                     keepalive_max_parallelism_per_client,
                     keepalive_parallelism_headroom,
-                    default_context_length)
+                    default_context_length,
+                    disallow_context_change)
                 VALUES (
                     $group_id,
                     $client_id,
@@ -1067,7 +1072,8 @@ internal sealed class ManagementStore
                     $keepalive_instances_to_keep_alive,
                     $keepalive_max_parallelism_per_client,
                     $keepalive_parallelism_headroom,
-                    $default_context_length)
+                    $default_context_length,
+                    $disallow_context_change)
                 """;
             command.Parameters.AddWithValue("$group_id", groupId);
             command.Parameters.AddWithValue("$client_id", string.IsNullOrWhiteSpace(clientId) ? DBNull.Value : clientId);
@@ -1077,12 +1083,13 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$keepalive_max_parallelism_per_client", policy.MaxParallelismPerClient);
             command.Parameters.AddWithValue("$keepalive_parallelism_headroom", policy.ParallelismHeadroom);
             command.Parameters.AddWithValue("$default_context_length", (object?)normalizedDefaultContextLength ?? DBNull.Value);
+            command.Parameters.AddWithValue("$disallow_context_change", disallowContextChange);
             command.ExecuteNonQuery();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
             var insertedId = (long)idCommand.ExecuteScalar()!;
-            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern, policy, normalizedDefaultContextLength);
+            return new GroupClientInfo(insertedId, groupId, clientId, model, clientPattern, policy, normalizedDefaultContextLength, disallowContextChange);
         }
     }
 
@@ -1100,6 +1107,51 @@ internal sealed class ManagementStore
             command.CommandText = "DELETE FROM group_members WHERE id = $id";
             command.Parameters.AddWithValue("$id", memberId);
             return command.ExecuteNonQuery() > 0;
+        }
+    }
+
+    public bool ShouldStripNumCtx(string? clientId, string? model)
+    {
+        if (!_isAvailable || string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT client_id, model, client_pattern
+                FROM group_members
+                WHERE disallow_context_change = 1
+                """;
+
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var memberClientId = reader.IsDBNull(0) ? null : reader.GetString(0);
+                var memberModel = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var memberPattern = reader.IsDBNull(2) ? null : reader.GetString(2);
+
+                if (string.IsNullOrWhiteSpace(memberModel))
+                {
+                    if (string.IsNullOrWhiteSpace(clientId)
+                        || !GroupAccess.ModelSelectorMatches(memberPattern ?? memberClientId ?? "", clientId))
+                    {
+                        continue;
+                    }
+
+                    return true;
+                }
+
+                if (GroupAccess.ModelSelectorMatches(memberModel, model))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -2363,7 +2415,8 @@ internal sealed class ManagementStore
                     keepalive_instances_to_keep_alive INTEGER NOT NULL DEFAULT 1,
                     keepalive_max_parallelism_per_client INTEGER NOT NULL DEFAULT 1,
                     keepalive_parallelism_headroom INTEGER NOT NULL DEFAULT 1,
-                    default_context_length INTEGER NULL
+                    default_context_length INTEGER NULL,
+                    disallow_context_change INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_group_members_group_id
@@ -2428,6 +2481,21 @@ internal sealed class ManagementStore
                 using var addDefaultContextLength = connection.CreateCommand();
                 addDefaultContextLength.CommandText = "ALTER TABLE group_members ADD COLUMN default_context_length INTEGER NULL";
                 addDefaultContextLength.ExecuteNonQuery();
+            }
+        }
+
+        using (var migrate = connection.CreateCommand())
+        {
+            migrate.CommandText = """
+                SELECT COUNT(*) FROM pragma_table_info('group_members') WHERE name = 'disallow_context_change'
+                """;
+            var hasDisallowContextChangeColumn = (long)migrate.ExecuteScalar()! > 0;
+
+            if (!hasDisallowContextChangeColumn)
+            {
+                using var addDisallowContextChange = connection.CreateCommand();
+                addDisallowContextChange.CommandText = "ALTER TABLE group_members ADD COLUMN disallow_context_change INTEGER NOT NULL DEFAULT 0";
+                addDisallowContextChange.ExecuteNonQuery();
             }
         }
 
@@ -2900,7 +2968,8 @@ internal sealed record GroupClientInfo(
     string? Model,
     string? ClientPattern,
     GroupClientKeepalivePolicy? KeepalivePolicy = null,
-    int? DefaultContextLength = null);
+    int? DefaultContextLength = null,
+    bool DisallowContextChange = false);
 
 internal sealed record GroupClientKeepalivePolicy(
     int InstancesToKeepAlive,
