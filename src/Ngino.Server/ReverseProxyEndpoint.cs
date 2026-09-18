@@ -138,6 +138,16 @@ internal static class ReverseProxyEndpoint
                     : groupAccess.IsClientModelAllowed(clientId, requestedModel)));
         if (connection is null)
         {
+            LogNoTunnelClientAvailable(
+                loggerFactory.CreateLogger("Ngino.Server.ReverseProxy"),
+                context.Request.Method,
+                $"{proxyPath}{context.Request.QueryString}",
+                requestedModel,
+                auth.UserKeyId,
+                hub,
+                groupAccess,
+                managementStore);
+
             if (!hub.HasClient)
             {
                 context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
@@ -240,6 +250,13 @@ internal static class ReverseProxyEndpoint
         var clientAccess = managementStore.GetClientAccess(clientId);
         if (clientAccess.IsDisabled)
         {
+            loggerFactory.CreateLogger("Ngino.Server.ReverseProxy")
+                .LogWarning(
+                    "Rejecting request to disabled tunnel client '{ClientId}': {Method} {PathAndQuery} (user key {UserKeyId}).",
+                    clientId,
+                    context.Request.Method,
+                    pathAndQuery,
+                    userKeyId ?? "<none>");
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             await context.Response.WriteAsync(GetClientDisabledMessage(clientId, clientAccess), context.RequestAborted);
             return;
@@ -255,6 +272,13 @@ internal static class ReverseProxyEndpoint
         var connection = hub.Get(clientId);
         if (connection is null)
         {
+            loggerFactory.CreateLogger("Ngino.Server.ReverseProxy")
+                .LogWarning(
+                    "No tunnel client '{ClientId}' is connected; rejecting {Method} {PathAndQuery} (user key {UserKeyId}).",
+                    clientId,
+                    context.Request.Method,
+                    pathAndQuery,
+                    userKeyId ?? "<none>");
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             await context.Response.WriteAsync($"No tunnel client with id '{clientId}' is connected.", context.RequestAborted);
             return;
@@ -411,6 +435,77 @@ internal static class ReverseProxyEndpoint
         string.IsNullOrWhiteSpace(requestedModel)
             ? "No tunnel client is available for this request."
             : $"No connected tunnel client reports model '{requestedModel}'. Check the status endpoint for connected client model lists.";
+
+    private static void LogNoTunnelClientAvailable(
+        ILogger logger,
+        string method,
+        string pathAndQuery,
+        string? requestedModel,
+        string? userKeyId,
+        TunnelHub hub,
+        GroupAccess groupAccess,
+        ManagementStore managementStore)
+    {
+        if (!logger.IsEnabled(LogLevel.Warning))
+        {
+            return;
+        }
+
+        var clients = hub.ClientSnapshots;
+        if (clients.Count == 0)
+        {
+            logger.LogWarning(
+                "No tunnel client connected; rejecting {Method} {PathAndQuery} (user key {UserKeyId}).",
+                method,
+                pathAndQuery,
+                userKeyId ?? "<none>");
+            return;
+        }
+
+        var evaluated = new List<string>();
+        foreach (var client in clients)
+        {
+            var reasons = new List<string>();
+
+            var access = managementStore.GetClientAccess(client.Id);
+            if (access.IsDisabled)
+            {
+                var detail = access.DisabledManually
+                    ? "disabled manually"
+                    : access.DisabledUntilUtc is { } until
+                        ? $"disabled until {until:O}"
+                        : "disabled";
+                if (!string.IsNullOrWhiteSpace(access.DisabledReason))
+                {
+                    detail += $" ({access.DisabledReason.Trim()})";
+                }
+
+                reasons.Add(detail);
+            }
+
+            if (!groupAccess.IsClientAllowed(client.Id))
+            {
+                reasons.Add("client not in user groups");
+            }
+            else if (requestedModel is not null
+                && !groupAccess.IsClientModelAllowed(client.Id, requestedModel))
+            {
+                reasons.Add($"model '{requestedModel}' not in user groups");
+            }
+
+            evaluated.Add(reasons.Count == 0
+                ? $"{client.Id} (candidate)"
+                : $"{client.Id} ({string.Join("; ", reasons)})");
+        }
+
+        logger.LogWarning(
+            "No tunnel client available for {Method} {PathAndQuery} (user key {UserKeyId}, requested model '{RequestedModel}'): evaluated [{EvaluatedClients}].",
+            method,
+            pathAndQuery,
+            userKeyId ?? "<none>",
+            requestedModel ?? "",
+            string.Join(", ", evaluated));
+    }
 
     private static string GetClientDisabledMessage(string clientId, ClientAccess access)
     {
