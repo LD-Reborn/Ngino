@@ -21,6 +21,8 @@ USE_OLLAMA_MODELS_PATH=""
 LLAMA_CPP_DOCKER_IMAGE=""
 LLAMA_CPP_BASE_PORT=""
 LLAMA_CPP_PARALLEL=""
+LLAMA_CPP_NUM_CTX=""
+LLAMA_CPP_KV_UNIFIED=false
 LLAMA_CPP_FALLBACK_COOLDOWN=""
 LOG_DIR=""
 SKIP_TLS_VERIFY=false
@@ -63,6 +65,10 @@ Optional:
                        Base port for llama.cpp containers; defaults to 8081
   --llama-cpp-parallel <num>
                        llama.cpp parallel slots per container; if unset, llama.cpp's own default is used
+  --llama-cpp-num-ctx <num>
+                       Context length per parallel slot; if set, containers start with --ctx-size <num> x parallel slots
+  --llama-cpp-kv-unified
+                       Use a unified KV cache for all parallel slots (llama.cpp --kv-unified)
   --llama-cpp-fallback-cooldown <sec>
                        Seconds before llama.cpp is retried after a failed container start; defaults to 180
   --log-dir <dir>      Directory for log files; defaults to <install-dir>/Logs
@@ -95,6 +101,8 @@ while [[ $# -gt 0 ]]; do
         --llama-cpp-docker-image)   LLAMA_CPP_DOCKER_IMAGE="$2"; shift 2 ;;
         --llama-cpp-base-port)      LLAMA_CPP_BASE_PORT="$2"; shift 2 ;;
         --llama-cpp-parallel)       LLAMA_CPP_PARALLEL="$2"; shift 2 ;;
+        --llama-cpp-num-ctx)        LLAMA_CPP_NUM_CTX="$2"; shift 2 ;;
+        --llama-cpp-kv-unified)     LLAMA_CPP_KV_UNIFIED=true; shift ;;
         --llama-cpp-fallback-cooldown) LLAMA_CPP_FALLBACK_COOLDOWN="$2"; shift 2 ;;
         --log-dir)                  LOG_DIR="$2"; shift 2 ;;
         --insecure-skip-tls-verify) SKIP_TLS_VERIFY=true; shift ;;
@@ -332,6 +340,12 @@ mkdir -p "$ENV_DIR"
         fi
         if [[ -n "$LLAMA_CPP_PARALLEL" ]]; then
             printf 'NGINO_LLAMA_CPP_PARALLEL=%s\n' "$LLAMA_CPP_PARALLEL"
+        fi
+        if [[ -n "$LLAMA_CPP_NUM_CTX" ]]; then
+            printf 'NGINO_LLAMA_CPP_NUM_CTX=%s\n' "$LLAMA_CPP_NUM_CTX"
+        fi
+        if [[ "$LLAMA_CPP_KV_UNIFIED" == "true" ]]; then
+            printf 'NGINO_LLAMA_CPP_KV_UNIFIED=true\n'
         fi
         if [[ -n "$LLAMA_CPP_FALLBACK_COOLDOWN" ]]; then
             printf 'NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS=%s\n' "$LLAMA_CPP_FALLBACK_COOLDOWN"

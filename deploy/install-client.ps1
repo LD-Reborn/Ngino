@@ -20,6 +20,8 @@ param(
     [string]$LlamaCppDockerImage = "",
     [int]$LlamaCppBasePort = 0,
     [int]$LlamaCppParallel = 0,
+    [int]$LlamaCppNumCtx = 0,
+    [switch]$LlamaCppKvUnified,
     [int]$LlamaCppFallbackCooldown = 0,
     [string]$LogDir = ""
 )
@@ -177,6 +179,12 @@ if ($UseLlamaCppViaDocker) {
     }
     if ($LlamaCppParallel -gt 0) {
         $serviceEnvironment += "NGINO_LLAMA_CPP_PARALLEL=$LlamaCppParallel"
+    }
+    if ($LlamaCppNumCtx -gt 0) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_NUM_CTX=$LlamaCppNumCtx"
+    }
+    if ($LlamaCppKvUnified) {
+        $serviceEnvironment += "NGINO_LLAMA_CPP_KV_UNIFIED=true"
     }
     if ($LlamaCppFallbackCooldown -gt 0) {
         $serviceEnvironment += "NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS=$LlamaCppFallbackCooldown"

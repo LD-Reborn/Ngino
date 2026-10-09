@@ -120,6 +120,8 @@ sudo nano /etc/ngino-client/env
 # NGINO_USE_LLAMA_CPP_VIA_DOCKER=true
 # NGINO_USE_OLLAMA_MODELS_PATH=/usr/share/ollama/.ollama/models
 # NGINO_LLAMA_CPP_PARALLEL=8
+# NGINO_LLAMA_CPP_NUM_CTX=262144
+# NGINO_LLAMA_CPP_KV_UNIFIED=true
 sudo systemctl restart ngino-client
 ```
 
@@ -132,7 +134,9 @@ $values = @(
     "NGINO_TOKEN=<client-key>",
     "NGINO_USE_LLAMA_CPP_VIA_DOCKER=true",
     "NGINO_USE_OLLAMA_MODELS_PATH=C:\Users\user\.ollama\models",
-    "NGINO_LLAMA_CPP_PARALLEL=8"
+    "NGINO_LLAMA_CPP_PARALLEL=8",
+    "NGINO_LLAMA_CPP_NUM_CTX=262144",
+    "NGINO_LLAMA_CPP_KV_UNIFIED=true"
 )
 Set-ItemProperty -Path $path -Name Environment -Value $values
 Restart-Service NginoClient
@@ -203,6 +207,8 @@ llama.cpp via Docker options (replaces Ollama for inferencing):
 | `--llama-cpp-docker-image <img>` | `NGINO_LLAMA_CPP_DOCKER_IMAGE` | Docker image; defaults to auto-detected (rocm/cuda/cpu) |
 | `--llama-cpp-base-port <num>` | `NGINO_LLAMA_CPP_BASE_PORT` | Base port for containers; defaults to `8081` |
 | `--llama-cpp-parallel <num>` | `NGINO_LLAMA_CPP_PARALLEL` | llama.cpp parallel slots per container; if unset, llama.cpp's own default is used (which is `1`) |
+| `--llama-cpp-num-ctx <num>` | `NGINO_LLAMA_CPP_NUM_CTX` | Context length per parallel slot; containers start with `--ctx-size <num> x parallel`. If unset, llama.cpp's own default context is used |
+| `--llama-cpp-kv-unified` | `NGINO_LLAMA_CPP_KV_UNIFIED` | Use a unified KV cache for all parallel slots (llama.cpp `--kv-unified`); default: off (per-slot caches) |
 | `--llama-cpp-fallback-cooldown <sec>` | `NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS` | Seconds before llama.cpp is retried after a failed container start; defaults to `180` |
 | `--log-dir <dir>` | `NGINO_LOG_DIR` | Directory for log files; defaults to `<app dir>/Logs` |
 

@@ -50,7 +50,9 @@ internal sealed class TunnelClient
                 _options.LlamaCppBasePort,
                 _logger,
                 _options.LlamaCppFallbackCooldown,
-                _options.LlamaCppParallel);
+                _options.LlamaCppParallel,
+                _options.LlamaCppNumCtx,
+                _options.LlamaCppKvUnified);
         }
     }
 
@@ -477,7 +479,8 @@ internal sealed class TunnelClient
                     };
                 }
 
-                var started = await _llamaCppManager.StartModelContainerAsync(model, cancellationToken);
+                var contextLength = ParseLoadContextLength(message.PayloadJson);
+                var started = await _llamaCppManager.StartModelContainerAsync(model, cancellationToken, contextLength);
                 if (!started)
                 {
                     _logger.LogWarning(
@@ -722,6 +725,34 @@ internal sealed class TunnelClient
 
     private static string NormalizeModelCommand(string? command) =>
         (command ?? "").Trim().ToLowerInvariant();
+
+    private static int? ParseLoadContextLength(string? payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(payloadJson);
+            if (document.RootElement.TryGetProperty("options", out var options)
+                && options.ValueKind == JsonValueKind.Object
+                && options.TryGetProperty("num_ctx", out var numCtx)
+                && numCtx.ValueKind == JsonValueKind.Number
+                && numCtx.TryGetInt32(out var value)
+                && value > 0)
+            {
+                return value;
+            }
+        }
+        catch (JsonException)
+        {
+            // Malformed payload: fall back to the client's num-ctx option.
+        }
+
+        return null;
+    }
 
     internal static bool IsModelInferencePath(string? pathAndQuery)
     {

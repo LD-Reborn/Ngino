@@ -28,6 +28,10 @@ internal sealed class ClientOptions
 
     public int? LlamaCppParallel { get; init; }
 
+    public int? LlamaCppNumCtx { get; init; }
+
+    public bool LlamaCppKvUnified { get; init; }
+
     public TimeSpan LlamaCppFallbackCooldown { get; init; } = TimeSpan.FromMinutes(3);
 
     public string? LogDirectory { get; init; }
@@ -73,6 +77,8 @@ internal sealed class ClientOptions
             LlamaCppDockerImage = Read(values, "llama-cpp-docker-image", "NGINO_LLAMA_CPP_DOCKER_IMAGE"),
             LlamaCppBasePort = ReadInt(values, 8081, "llama-cpp-base-port", "NGINO_LLAMA_CPP_BASE_PORT"),
             LlamaCppParallel = ReadOptionalInt(values, "llama-cpp-parallel", "NGINO_LLAMA_CPP_PARALLEL"),
+            LlamaCppNumCtx = ReadOptionalInt(values, "llama-cpp-num-ctx", "NGINO_LLAMA_CPP_NUM_CTX"),
+            LlamaCppKvUnified = ReadBool(values, false, "llama-cpp-kv-unified", "NGINO_LLAMA_CPP_KV_UNIFIED"),
             LlamaCppFallbackCooldown = TimeSpan.FromSeconds(ReadInt(values, 180, "llama-cpp-fallback-cooldown", "NGINO_LLAMA_CPP_FALLBACK_COOLDOWN_SECONDS")),
             LogDirectory = NormalizeDirectoryPath(Read(values, "log-dir", "NGINO_LOG_DIR"))
         };
@@ -93,6 +99,8 @@ internal sealed class ClientOptions
           --llama-cpp-docker-image <img> llama.cpp Docker image; defaults to auto-detected (rocm/cuda/cpu)
           --llama-cpp-base-port <num>    Base port for llama.cpp containers; defaults to 8081
           --llama-cpp-parallel <num>     llama.cpp parallel slots per container; if unset, llama.cpp's own default is used
+          --llama-cpp-num-ctx <num>      Context length per parallel slot; if set, containers start with --ctx-size <num> x parallel slots
+          --llama-cpp-kv-unified         Use a unified KV cache for all parallel slots (llama.cpp --kv-unified); default: off
           --llama-cpp-fallback-cooldown <sec>
                                          Seconds before llama.cpp is retried after a failed container start; defaults to 180
           --log-dir <dir>                Directory for log files; defaults to <app dir>/Logs
@@ -140,6 +148,7 @@ internal sealed class ClientOptions
         {
             "insecure-skip-tls-verify" => true,
             "use-llama-cpp-via-docker" => true,
+            "llama-cpp-kv-unified" => true,
             _ => false
         };
     }

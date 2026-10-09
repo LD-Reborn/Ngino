@@ -26,6 +26,14 @@ try
             options.LlamaCppParallel.HasValue
                 ? $"  llama.cpp parallel slots: {options.LlamaCppParallel.Value}"
                 : "  llama.cpp parallel slots: (llama.cpp default)");
+        Console.WriteLine(
+            options.LlamaCppNumCtx.HasValue
+                ? $"  llama.cpp context per slot: {options.LlamaCppNumCtx.Value}"
+                : "  llama.cpp context per slot: (llama.cpp default)");
+        Console.WriteLine(
+            options.LlamaCppKvUnified
+                ? "  llama.cpp kv cache: unified"
+                : "  llama.cpp kv cache: per slot (llama.cpp default)");
     }
 
     var logDirectory = options.LogDirectory ?? Path.Combine(AppContext.BaseDirectory, "Logs");

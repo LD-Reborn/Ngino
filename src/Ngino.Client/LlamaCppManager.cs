@@ -23,6 +23,8 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
     private readonly string _dockerImage;
     private readonly int _basePort;
     private readonly int? _parallel;
+    private readonly int? _numCtx;
+    private readonly bool _kvUnified;
     private readonly TimeSpan _fallbackCooldown;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, int> _modelPorts = new(StringComparer.OrdinalIgnoreCase);
@@ -37,7 +39,9 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         int? basePort,
         ILogger? logger = null,
         TimeSpan fallbackCooldown = default,
-        int? parallel = null)
+        int? parallel = null,
+        int? numCtx = null,
+        bool kvUnified = false)
     {
         _manifestsPath = Path.Combine(ollamaModelsPath, "manifests");
         _blobsPath = Path.Combine(ollamaModelsPath, "blobs");
@@ -45,6 +49,8 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         _basePort = basePort ?? DefaultBasePort;
         _fallbackCooldown = fallbackCooldown > TimeSpan.Zero ? fallbackCooldown : DefaultFallbackCooldown;
         _parallel = parallel is > 0 ? parallel : null;
+        _numCtx = numCtx is > 0 ? numCtx : null;
+        _kvUnified = kvUnified;
         _logger = logger ?? NullLogger<LlamaCppManager>.Instance;
     }
 
@@ -175,7 +181,10 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         return null;
     }
 
-    public async Task<bool> StartModelContainerAsync(LlamaCppModel model, CancellationToken cancellationToken)
+    public async Task<bool> StartModelContainerAsync(
+        LlamaCppModel model,
+        CancellationToken cancellationToken,
+        int? contextLength = null)
     {
         var ollamaName = model.OllamaName;
         if (string.IsNullOrWhiteSpace(ollamaName))
@@ -188,7 +197,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         await startLock.WaitAsync(cancellationToken);
         try
         {
-            return await StartModelContainerCoreAsync(model, cancellationToken);
+            return await StartModelContainerCoreAsync(model, cancellationToken, contextLength);
         }
         finally
         {
@@ -196,7 +205,10 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         }
     }
 
-    private async Task<bool> StartModelContainerCoreAsync(LlamaCppModel model, CancellationToken cancellationToken)
+    private async Task<bool> StartModelContainerCoreAsync(
+        LlamaCppModel model,
+        CancellationToken cancellationToken,
+        int? contextLength = null)
     {
         var ollamaName = model.OllamaName;
         if (string.IsNullOrWhiteSpace(ollamaName))
@@ -241,7 +253,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
 
             await RunDockerAsync(["rm", "-f", containerName], CancellationToken.None);
 
-            var args = BuildDockerRunArgs(containerName, model, port);
+            var args = BuildDockerRunArgs(containerName, model, port, contextLength);
             _logger.LogInformation(
                 "Starting llama.cpp container for {Model} on port {Port}: docker {Args}",
                 ollamaName, port, string.Join(" ", args));
@@ -477,7 +489,7 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
         return null;
     }
 
-    internal string[] BuildDockerRunArgs(string containerName, LlamaCppModel model, int port)
+    internal string[] BuildDockerRunArgs(string containerName, LlamaCppModel model, int port, int? contextLength = null)
     {
         var blobsDir = Path.GetDirectoryName(Path.GetFullPath(model.BlobPath))!;
         var blobFile = Path.GetFileName(model.BlobPath);
@@ -515,6 +527,19 @@ internal sealed partial class LlamaCppManager : IAsyncDisposable
             args.Add("--parallel");
             args.Add(_parallel.Value.ToString());
         }
+
+        var numCtx = contextLength ?? _numCtx;
+        if (numCtx is > 0)
+        {
+            args.Add("--ctx-size");
+            args.Add(((long)numCtx.Value * (_parallel ?? 1)).ToString());
+        }
+
+        if (_kvUnified)
+        {
+            args.Add("--kv-unified");
+        }
+
         args.Add("--host");
         args.Add("0.0.0.0");
         args.Add("--port");
