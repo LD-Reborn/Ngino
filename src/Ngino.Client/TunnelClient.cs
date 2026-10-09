@@ -24,6 +24,7 @@ internal sealed class TunnelClient
     private readonly object _modelSnapshotLock = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly LlamaCppManager? _llamaCppManager;
+    private UpstreamMode _upstreamMode;
     private List<string> _lastActiveModels = [];
     private List<string> _lastModels = [];
 
@@ -31,6 +32,7 @@ internal sealed class TunnelClient
     {
         _options = options;
         _logger = logger ?? NullLogger<TunnelClient>.Instance;
+        _upstreamMode = options.UpstreamMode;
         _httpClient = new HttpClient
         {
             Timeout = Timeout.InfiniteTimeSpan
@@ -200,14 +202,39 @@ internal sealed class TunnelClient
                 .ToList();
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/tags"));
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        if (_upstreamMode == UpstreamMode.Ollama)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/tags"));
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
-        return ExtractModelNames(document.RootElement);
+                return ExtractModelNames(document.RootElement);
+            }
+
+            _logger.LogInformation(
+                "Upstream did not serve /api/tags ({StatusCode}); trying the OpenAI-compatible /v1/models listing.",
+                (int)response.StatusCode);
+        }
+
+        using var openAiRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/v1/models"));
+        using var openAiResponse = await _httpClient.SendAsync(openAiRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        openAiResponse.EnsureSuccessStatusCode();
+
+        await using var openAiStream = await openAiResponse.Content.ReadAsStreamAsync(cancellationToken);
+        using var openAiDocument = await JsonDocument.ParseAsync(openAiStream, cancellationToken: cancellationToken);
+
+        if (_upstreamMode == UpstreamMode.Ollama)
+        {
+            _upstreamMode = UpstreamMode.OpenAi;
+            _logger.LogInformation(
+                "Upstream detected as OpenAI-compatible; model listings will use /v1/models.");
+        }
+
+        return ExtractModelNames(openAiDocument.RootElement);
     }
 
     private async Task<List<string>> GetActiveUpstreamModelsAsync(CancellationToken cancellationToken)
@@ -223,31 +250,60 @@ internal sealed class TunnelClient
                 .ToList();
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/ps"));
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-
-        if (!response.IsSuccessStatusCode)
+        if (_upstreamMode == UpstreamMode.OpenAi)
         {
-            _logger.LogDebug("Ollama /api/ps returned {StatusCode}; active model list will be empty.", response.StatusCode);
+            // llama.cpp/strata-style /models lists the loaded models; OpenAI servers
+            // without such an endpoint simply report no active models.
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/models"));
+            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogDebug(
+                    "OpenAI-compatible upstream returned {StatusCode} for /models; active model list will be empty.",
+                    response.StatusCode);
+                return [];
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+
+            return ExtractModelNames(document.RootElement);
+        }
+
+        using var ollamaRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.Upstream, "/api/ps"));
+        using var ollamaResponse = await _httpClient.SendAsync(ollamaRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+        if (!ollamaResponse.IsSuccessStatusCode)
+        {
+            _logger.LogDebug("Ollama /api/ps returned {StatusCode}; active model list will be empty.", ollamaResponse.StatusCode);
             return [];
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        await using var ollamaStream = await ollamaResponse.Content.ReadAsStreamAsync(cancellationToken);
+        using var ollamaDocument = await JsonDocument.ParseAsync(ollamaStream, cancellationToken: cancellationToken);
 
-        return ExtractModelNames(document.RootElement);
+        return ExtractModelNames(ollamaDocument.RootElement);
     }
 
     internal static List<string> ExtractModelNames(JsonElement root)
     {
         var models = new List<string>();
 
-        if (root.ValueKind == JsonValueKind.Object
-            && root.TryGetProperty("models", out var ollamaModels)
-            && ollamaModels.ValueKind == JsonValueKind.Array)
+        if (root.ValueKind == JsonValueKind.Object)
         {
-            AddModelNames(models, ollamaModels, "name");
-            AddModelNames(models, ollamaModels, "model");
+            if (root.TryGetProperty("models", out var ollamaModels)
+                && ollamaModels.ValueKind == JsonValueKind.Array)
+            {
+                AddModelNames(models, ollamaModels, "name");
+                AddModelNames(models, ollamaModels, "model");
+            }
+
+            if (root.TryGetProperty("data", out var openAiModels)
+                && openAiModels.ValueKind == JsonValueKind.Array)
+            {
+                AddModelNames(models, openAiModels, "id");
+            }
         }
 
         return NormalizeModelNames(models);
@@ -438,6 +494,11 @@ internal sealed class TunnelClient
             return await ExecuteModelCommandWithLlamaCppAsync(message, cancellationToken);
         }
 
+        if (_upstreamMode == UpstreamMode.OpenAi)
+        {
+            return await ExecuteModelCommandWithOpenAiUpstreamAsync(message, cancellationToken);
+        }
+
         using var request = BuildModelCommandRequest(message);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
@@ -575,6 +636,38 @@ internal sealed class TunnelClient
         }
     }
 
+    private async Task<TunnelMessage> ExecuteModelCommandWithOpenAiUpstreamAsync(
+        TunnelMessage message, CancellationToken cancellationToken)
+    {
+        var normalizedCommand = NormalizeModelCommand(message.Command);
+
+        if (normalizedCommand is not ("load" or "unload"))
+        {
+            throw new InvalidOperationException(
+                $"Model command '{message.Command}' is not supported for OpenAI-compatible upstreams.");
+        }
+
+        using var request = BuildOpenAiModelCommandRequest(_options.Upstream, normalizedCommand, message.Model, message.PayloadJson);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode
+            && (response.StatusCode == System.Net.HttpStatusCode.NotFound
+                || response.StatusCode == System.Net.HttpStatusCode.MethodNotAllowed
+                || response.StatusCode == System.Net.HttpStatusCode.NotImplemented))
+        {
+            // The upstream serves its models on demand and has no load/unload endpoints,
+            // so the keepalive command is a no-op rather than an error.
+            _logger.LogDebug(
+                "OpenAI-compatible upstream has no /{Endpoint} endpoint; treating '{Command}' for model '{Model}' as a no-op.",
+                normalizedCommand, normalizedCommand, message.Model);
+
+            return BuildModelCommandResult(message.RequestId, 200, "OK", []);
+        }
+
+        return BuildModelCommandResult(message.RequestId, response, body);
+    }
+
     private static TunnelMessage BuildModelCommandResult(
         string requestId,
         HttpResponseMessage response,
@@ -697,6 +790,52 @@ internal sealed class TunnelClient
         }
 
         return node;
+    }
+
+    internal static HttpRequestMessage BuildOpenAiModelCommandRequest(Uri upstream, string? command, string? modelName, string? payloadJson = null)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            throw new InvalidOperationException("Model command is missing a model name.");
+        }
+
+        var model = modelName.Trim();
+        var normalizedCommand = NormalizeModelCommand(command);
+
+        if (normalizedCommand is not ("load" or "unload"))
+        {
+            throw new InvalidOperationException(
+                $"Unsupported model command '{command}' for OpenAI-compatible upstreams.");
+        }
+
+        var node = new JsonObject
+        {
+            ["model"] = model
+        };
+
+        if (!string.IsNullOrWhiteSpace(payloadJson))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(payloadJson);
+                if (document.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var property in document.RootElement.EnumerateObject())
+                    {
+                        node[property.Name] = JsonNode.Parse(property.Value.GetRawText());
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Ignore malformed payloads; the default load is used.
+            }
+        }
+
+        return new HttpRequestMessage(HttpMethod.Post, new Uri(upstream, $"/{normalizedCommand}"))
+        {
+            Content = JsonContent(node)
+        };
     }
 
     internal static HttpRequestMessage BuildEmbeddingModelCommandRequest(Uri upstream, string? command, string? modelName)

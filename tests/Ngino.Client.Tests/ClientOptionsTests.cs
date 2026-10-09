@@ -92,4 +92,34 @@ public sealed class ClientOptionsTests
 
         Assert.False(options.LlamaCppKvUnified);
     }
+
+    [Fact]
+    public void UpstreamModeDefaultsToOllama()
+    {
+        var options = ClientOptions.Parse([]);
+
+        Assert.Equal(UpstreamMode.Ollama, options.UpstreamMode);
+    }
+
+    [Fact]
+    public void UpstreamModeCanBeSetToOpenAi()
+    {
+        var options = ClientOptions.Parse(["--upstream-mode", "openai"]);
+
+        Assert.Equal(UpstreamMode.OpenAi, options.UpstreamMode);
+    }
+
+    [Fact]
+    public void UpstreamModeAcceptsEnvironmentStyleValue()
+    {
+        var options = ClientOptions.Parse(["--upstream-mode=openai"]);
+
+        Assert.Equal(UpstreamMode.OpenAi, options.UpstreamMode);
+    }
+
+    [Fact]
+    public void UpstreamModeRejectsUnknownValues()
+    {
+        Assert.Throws<ArgumentException>(() => ClientOptions.Parse(["--upstream-mode=bogus"]));
+    }
 }

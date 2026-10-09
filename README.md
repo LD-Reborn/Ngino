@@ -96,12 +96,13 @@ Admin UI:
 - The optional Keycloak settings live under `Authentication:Keycloak` in `appsettings.json` (see `appsettings.Example.json`).
 - User keys created in the UI are accepted on the proxy endpoints via `X-Ngino-Token`, `Authorization: Bearer <key>`, or the `/token/<key>/...` path prefix. Query-string auth (`?token=...`) is only accepted on the status and tunnel endpoints.
 - Client keys created in the UI authorize tunnel connections on the tunnel endpoint. Pass the key to the client via its `--token`/`NGINO_TOKEN`. Client keys are only accepted on the tunnel endpoint, and user keys are only accepted on the proxy endpoints.
-- Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`).
+- Model add/remove/load/unload commands are sent through the connected tunnel client to Ollama (`/api/pull`, `/api/delete`, `/api/generate`, and `/api/show`). For OpenAI-compatible upstreams (`--upstream-mode openai`) only `load`/`unload` are supported, via llama.cpp/strata-style `/load` and `/unload` endpoints.
 
 Client options:
 
 - `--server <url>` or `NGINO_SERVER`: server base URL, for example `http://your-server:5050`.
 - `--upstream <url>` or `NGINO_UPSTREAM`: local Ollama URL, defaults to `http://localhost:11434`.
+- `--upstream-mode <ollama|openai>` or `NGINO_UPSTREAM_MODE`: upstream API flavor. `openai` targets OpenAI-compatible servers (llama.cpp, strata, vLLM) and lists models from `/v1/models`; load/unload warmup commands use llama.cpp/strata-style `/load`/`/unload` endpoints (treated as no-ops when the server has none). Defaults to `ollama`; if an Ollama-mode upstream does not serve `/api/tags`, the client automatically falls back to `/v1/models`.
 - `--token <value>` or `NGINO_TOKEN`: the client key created in the admin UI, or the server's `--client-token` shared secret if that is configured. Sent to the server as `X-Ngino-Token` to authenticate the tunnel connection.
 - `--client-id <name>` or `NGINO_CLIENT_ID`: identifies this machine on the server; defaults to the machine name.
 - `--tunnel-path <path>` or `NGINO_TUNNEL_PATH`: defaults to `/_ngino/tunnel`.

@@ -15,6 +15,7 @@ SERVER_URL=""
 TOKEN=""
 CLIENT_ID="$(hostname -s 2>/dev/null || echo "linux-client")"
 UPSTREAM="$DEFAULT_UPSTREAM"
+UPSTREAM_MODE=""
 SKIP_OLLAMA=false
 USE_LLAMA_CPP_VIA_DOCKER=false
 USE_OLLAMA_MODELS_PATH=""
@@ -52,6 +53,8 @@ Required:
 Optional:
   --client-id <name>   Client identifier; defaults to hostname
   --upstream <url>     Local Ollama URL; defaults to $DEFAULT_UPSTREAM
+  --upstream-mode <ollama|openai>
+                       Upstream API flavor; openai for OpenAI-compatible servers (llama.cpp, strata, vLLM); defaults to ollama
   --install-dir <dir>  Install directory; defaults to $DEFAULT_INSTALL_DIR
   --service-name <n>   systemd service name; defaults to $DEFAULT_SERVICE_NAME
   --no-ollama          Skip Ollama installation and status check
@@ -93,6 +96,7 @@ while [[ $# -gt 0 ]]; do
         --token)                    TOKEN="$2"; shift 2 ;;
         --client-id)                CLIENT_ID="$2"; shift 2 ;;
         --upstream)                 UPSTREAM="$2"; shift 2 ;;
+        --upstream-mode)            UPSTREAM_MODE="$2"; shift 2 ;;
         --install-dir)              INSTALL_DIR="$2"; shift 2 ;;
         --service-name)             SERVICE_NAME="$2"; shift 2 ;;
         --no-ollama)                SKIP_OLLAMA=true; shift ;;
@@ -324,6 +328,9 @@ ENV_DIR="/etc/ngino-client"
 mkdir -p "$ENV_DIR"
 {
     printf 'NGINO_TOKEN=%s\n' "$TOKEN"
+    if [[ -n "$UPSTREAM_MODE" ]]; then
+        printf 'NGINO_UPSTREAM_MODE=%s\n' "$UPSTREAM_MODE"
+    fi
     if [[ "$SKIP_TLS_VERIFY" == "true" ]]; then
         printf 'NGINO_INSECURE_SKIP_TLS_VERIFY=true\n'
     fi

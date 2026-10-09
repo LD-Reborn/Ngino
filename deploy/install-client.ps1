@@ -11,6 +11,7 @@ param(
 
     [string]$ClientId = $(if ($env:COMPUTERNAME) { $env:COMPUTERNAME.ToLowerInvariant() } else { "windows-client" }),
     [string]$Upstream = "http://localhost:11434",
+    [string]$UpstreamMode = "",
     [string]$InstallDir = "$env:ProgramFiles\Ngino Client",
     [string]$ServiceName = "NginoClient",
     [switch]$InsecureSkipTlsVerify,
@@ -166,6 +167,9 @@ $serviceEnvironment = @(
     "DOTNET_CLI_TELEMETRY_OPTOUT=1",
     "DOTNET_NOLOGO=1"
 )
+if (-not [string]::IsNullOrWhiteSpace($UpstreamMode)) {
+    $serviceEnvironment += "NGINO_UPSTREAM_MODE=$UpstreamMode"
+}
 if ($UseLlamaCppViaDocker) {
     $serviceEnvironment += "NGINO_USE_LLAMA_CPP_VIA_DOCKER=true"
     if (-not [string]::IsNullOrWhiteSpace($UseOllamaModelsPath)) {

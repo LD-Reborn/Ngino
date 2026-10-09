@@ -187,6 +187,26 @@ internal sealed class UpstreamRequest
         return null;
     }
 
+    internal static long TryGetContentLength(TunnelMessage message)
+    {
+        if (message.Headers is null)
+        {
+            return -1;
+        }
+
+        foreach (var header in message.Headers)
+        {
+            if (string.Equals(header.Name, "Content-Length", StringComparison.OrdinalIgnoreCase)
+                && long.TryParse(header.Value, out var value)
+                && value >= 0)
+            {
+                return value;
+            }
+        }
+
+        return -1;
+    }
+
     private HttpRequestMessage BuildHttpRequest()
     {
         var path = _initialMessage.PathAndQuery ?? "/";
@@ -204,7 +224,11 @@ internal sealed class UpstreamRequest
 
         if (_initialMessage.HasBody)
         {
-            request.Content = new ChannelHttpContent(_requestBody.Reader, _cancellationTokenSource.Token);
+            // Forward the known Content-Length when the body is passed through unchanged so the
+            // upstream receives a plain Content-Length request instead of chunked transfer, which
+            // servers like strata (Python http.server) cannot read.
+            var contentLength = _bodyTransform is null ? TryGetContentLength(_initialMessage) : -1;
+            request.Content = new ChannelHttpContent(_requestBody.Reader, _cancellationTokenSource.Token, contentLength);
         }
 
         foreach (var header in _initialMessage.Headers)

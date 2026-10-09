@@ -76,6 +76,62 @@ public sealed class TunnelClientModelTests
         Assert.False(document.RootElement.TryGetProperty("options", out _));
     }
 
+    [Fact]
+    public void ExtractModelNames_ReadsOpenAiModelList()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "object": "list",
+              "data": [
+                { "id": "qwen3.8-flash-next", "object": "model", "owned_by": "strata" },
+                { "id": "granite4.1:8b" },
+                { "id": " QWEN3.8-FLASH-NEXT " }
+              ]
+            }
+            """);
+
+        var models = TunnelClient.ExtractModelNames(document.RootElement);
+
+        Assert.Equal(["granite4.1:8b", "qwen3.8-flash-next"], models);
+    }
+
+    [Fact]
+    public async Task BuildOpenAiModelCommandRequest_LoadPostsModelToJsonEndpoint()
+    {
+        using var request = TunnelClient.BuildOpenAiModelCommandRequest(
+            Upstream,
+            "load",
+            " qwen3.8-flash-next ",
+            """{"options":{"num_ctx":8192}}""");
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("http://localhost:11434/load", request.RequestUri!.AbsoluteUri);
+        Assert.Equal("qwen3.8-flash-next", document.RootElement.GetProperty("model").GetString());
+        Assert.Equal(8192, document.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32());
+    }
+
+    [Fact]
+    public async Task BuildOpenAiModelCommandRequest_UnloadPostsToUnloadEndpoint()
+    {
+        using var request = TunnelClient.BuildOpenAiModelCommandRequest(Upstream, "unload", "qwen3.8-flash-next");
+        var body = await request.Content!.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("http://localhost:11434/unload", request.RequestUri!.AbsoluteUri);
+        Assert.Equal("qwen3.8-flash-next", document.RootElement.GetProperty("model").GetString());
+    }
+
+    [Fact]
+    public void BuildOpenAiModelCommandRequest_RejectsUnsupportedCommands()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => TunnelClient.BuildOpenAiModelCommandRequest(Upstream, "pull", "qwen3.8-flash-next"));
+    }
+
     [Theory]
     [InlineData("load", -1)]
     [InlineData("unload", 0)]

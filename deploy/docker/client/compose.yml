@@ -14,6 +14,7 @@ services:
       - NGINO_TOKEN=${NGINO_TOKEN:?Set NGINO_TOKEN (client key) in .env}
       - NGINO_CLIENT_ID=${NGINO_CLIENT_ID:-ngino-docker-client}
       - NGINO_UPSTREAM=${NGINO_UPSTREAM:-http://localhost:11434}
+      - NGINO_UPSTREAM_MODE=${NGINO_UPSTREAM_MODE:-ollama}
       - NGINO_USE_LLAMA_CPP_VIA_DOCKER=${NGINO_USE_LLAMA_CPP_VIA_DOCKER:-false}
       - NGINO_USE_OLLAMA_MODELS_PATH=${NGINO_USE_OLLAMA_MODELS_PATH:-/usr/share/ollama/.ollama/models}
       - NGINO_LLAMA_CPP_DOCKER_IMAGE=${NGINO_LLAMA_CPP_DOCKER_IMAGE:-}

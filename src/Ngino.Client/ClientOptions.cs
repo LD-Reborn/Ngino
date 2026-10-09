@@ -2,11 +2,19 @@ using Ngino.Protocol;
 
 namespace Ngino.Client;
 
+internal enum UpstreamMode
+{
+    Ollama,
+    OpenAi
+}
+
 internal sealed class ClientOptions
 {
     public Uri Server { get; init; } = new("http://localhost:5001");
 
     public Uri Upstream { get; init; } = new("http://localhost:11434");
+
+    public UpstreamMode UpstreamMode { get; init; } = UpstreamMode.Ollama;
 
     public string TunnelPath { get; init; } = ProtocolConstants.DefaultTunnelPath;
 
@@ -67,6 +75,7 @@ internal sealed class ClientOptions
         {
             Server = ReadUri(values, "server", "NGINO_SERVER", "http://localhost:5001"),
             Upstream = ReadUri(values, "upstream", "NGINO_UPSTREAM", "http://localhost:11434"),
+            UpstreamMode = ReadUpstreamMode(values, "upstream-mode", "NGINO_UPSTREAM_MODE"),
             TunnelPath = NormalizePath(Read(values, "tunnel-path", "NGINO_TUNNEL_PATH") ?? ProtocolConstants.DefaultTunnelPath),
             Token = Read(values, "token", "NGINO_TOKEN"),
             ClientId = Read(values, "client-id", "NGINO_CLIENT_ID") ?? Environment.MachineName.ToLowerInvariant(),
@@ -89,6 +98,7 @@ internal sealed class ClientOptions
         Ngino.Client options:
           --server <url>                 Server base URL, e.g. http://my-server:5050
           --upstream <url>               Local upstream URL, e.g. http://localhost:11434
+          --upstream-mode <ollama|openai> Upstream API flavor; openai for OpenAI-compatible servers (llama.cpp, strata, vLLM); defaults to ollama
           --token <value>                Optional token matching the server
           --client-id <name>             Identifies this machine on the server; defaults to the machine name
           --tunnel-path <path>           Defaults to /_ngino/tunnel
@@ -200,6 +210,19 @@ internal sealed class ClientOptions
         }
 
         return uri;
+    }
+
+    private static UpstreamMode ReadUpstreamMode(Dictionary<string, string> values, params string[] keys)
+    {
+        var value = Read(values, keys);
+
+        return value switch
+        {
+            null => UpstreamMode.Ollama,
+            var raw when raw.Trim().Equals("ollama", StringComparison.OrdinalIgnoreCase) => UpstreamMode.Ollama,
+            var raw when raw.Trim().Equals("openai", StringComparison.OrdinalIgnoreCase) => UpstreamMode.OpenAi,
+            var unknown => throw new ArgumentException($"Unknown upstream mode '{unknown}'. Use 'ollama' or 'openai'.")
+        };
     }
 
     private static string NormalizePath(string path) =>

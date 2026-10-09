@@ -7,11 +7,13 @@ internal sealed class ChannelHttpContent : HttpContent
 {
     private readonly CancellationToken _cancellationToken;
     private readonly ChannelReader<byte[]> _reader;
+    private readonly long _contentLength;
 
-    public ChannelHttpContent(ChannelReader<byte[]> reader, CancellationToken cancellationToken)
+    public ChannelHttpContent(ChannelReader<byte[]> reader, CancellationToken cancellationToken, long contentLength = -1)
     {
         _reader = reader;
         _cancellationToken = cancellationToken;
+        _contentLength = contentLength;
     }
 
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
@@ -29,6 +31,12 @@ internal sealed class ChannelHttpContent : HttpContent
 
     protected override bool TryComputeLength(out long length)
     {
+        if (_contentLength >= 0)
+        {
+            length = _contentLength;
+            return true;
+        }
+
         length = -1;
         return false;
     }

@@ -1,5 +1,6 @@
 using System.Net.Sockets;
 using Ngino.Client;
+using Ngino.Protocol;
 using Xunit;
 
 namespace Ngino.Client.Tests;
@@ -57,5 +58,38 @@ public sealed class UpstreamRequestTests
         var exception = new HttpRequestException("Connection reset by peer");
 
         Assert.False(UpstreamRequest.IsConnectionRefused(exception));
+    }
+
+    [Fact]
+    public void TryGetContentLength_ReadsForwardedContentLengthHeader()
+    {
+        var message = new TunnelMessage
+        {
+            Headers = [new HeaderPair("Content-Length", "123")]
+        };
+
+        Assert.Equal(123, UpstreamRequest.TryGetContentLength(message));
+    }
+
+    [Fact]
+    public void TryGetContentLength_ReturnsMinusOneWithoutHeader()
+    {
+        var message = new TunnelMessage
+        {
+            Headers = [new HeaderPair("Content-Type", "application/json")]
+        };
+
+        Assert.Equal(-1, UpstreamRequest.TryGetContentLength(message));
+    }
+
+    [Fact]
+    public void TryGetContentLength_IgnoresInvalidValues()
+    {
+        var message = new TunnelMessage
+        {
+            Headers = [new HeaderPair("Content-Length", "not-a-number")]
+        };
+
+        Assert.Equal(-1, UpstreamRequest.TryGetContentLength(message));
     }
 }
