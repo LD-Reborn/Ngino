@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -17,6 +18,22 @@ internal sealed class ManagementStore
     private readonly ILogger<ManagementStore> _logger;
     private bool _isAvailable;
     private string? _lastError;
+
+    // Derived caches for the proxy hot path. Every proxied request needs client
+    // access, group access, num-ctx rules and billing information; without these
+    // caches each request runs several SQLite queries under the global lock.
+    // All entries are cleared on any write to the management database.
+    private readonly Dictionary<string, ClientControlRow?> _clientControls = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<string>> _userKeyGroupIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<string>> _clientKeyGroupIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<GroupMemberRow>> _groupMembers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GroupBillingInfo?> _groupBilling = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<GroupBillingRule>> _billingRules = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GroupBillingInfo?> _billingByUserKey = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _paymentTotals = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, double> _costTotals = new(StringComparer.Ordinal);
+    private readonly List<ContextChangeRule> _contextChangeRules = new();
+    private bool _contextChangeRulesLoaded;
 
     public ManagementStore(ServerSettings settings, ILogger<ManagementStore> logger)
     {
@@ -180,6 +197,7 @@ internal sealed class ManagementStore
             command.ExecuteNonQuery();
 
             _userKeysByHash[state.KeyHash] = state;
+            InvalidateDerivedCaches();
         }
 
         return new CreatedUserKey(
@@ -211,6 +229,8 @@ internal sealed class ManagementStore
                 {
                     _userKeysByHash.Remove(pair.Key);
                 }
+
+                InvalidateDerivedCaches();
             }
 
             return deleted;
@@ -314,6 +334,7 @@ internal sealed class ManagementStore
             command.ExecuteNonQuery();
 
             _clientKeysByHash[state.KeyHash] = state;
+            InvalidateDerivedCaches();
         }
 
         return new CreatedUserKey(
@@ -345,6 +366,8 @@ internal sealed class ManagementStore
                 {
                     _clientKeysByHash.Remove(pair.Key);
                 }
+
+                InvalidateDerivedCaches();
             }
 
             return deleted;
@@ -375,41 +398,31 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc, warmth
-                FROM client_controls
-                WHERE client_id = $client_id
-                """;
-            command.Parameters.AddWithValue("$client_id", clientId);
-
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
+            if (!_clientControls.TryGetValue(clientId, out var row))
             {
-                return ClientAccess.Enabled;
+                using var connection = OpenConnection();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT disabled_until_utc, disabled_manually, disabled_reason, disabled_from_utc, warmth
+                    FROM client_controls
+                    WHERE client_id = $client_id
+                    """;
+                command.Parameters.AddWithValue("$client_id", clientId);
+
+                using var reader = command.ExecuteReader();
+                row = reader.Read()
+                    ? new ClientControlRow(
+                        ReadNullableDateTimeOffset(reader, 0),
+                        reader.GetInt32(1) != 0,
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        ReadNullableDateTimeOffset(reader, 3),
+                        reader.GetInt32(4))
+                    : null;
+
+                _clientControls[clientId] = row;
             }
 
-            var disabledUntil = ReadNullableDateTimeOffset(reader, 0);
-            var disabledManually = reader.GetInt32(1) != 0;
-            var reason = reader.IsDBNull(2) ? null : reader.GetString(2);
-            var disabledFrom = ReadNullableDateTimeOffset(reader, 3);
-            var warmth = reader.GetInt32(4);
-
-            var now = DateTimeOffset.UtcNow;
-            var isScheduled = disabledFrom > now;
-
-            if (disabledManually && !isScheduled)
-            {
-                return new ClientAccess(true, disabledFrom, null, true, reason, warmth);
-            }
-
-            if (!isScheduled && disabledUntil is { } until && until > now)
-            {
-                return new ClientAccess(true, disabledFrom, until, false, reason, warmth);
-            }
-
-            return new ClientAccess(false, disabledFrom, disabledUntil, false, reason, warmth);
+            return row is null ? ClientAccess.Enabled : row.ToAccess();
         }
     }
 
@@ -504,6 +517,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$warmth", warmth);
             command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
         }
     }
 
@@ -601,6 +615,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$disabled_reason", string.IsNullOrWhiteSpace(reason) ? DBNull.Value : reason.Trim());
             command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
         }
     }
 
@@ -642,6 +657,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$client_id", clientId);
             command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
         }
     }
 
@@ -702,6 +718,19 @@ internal sealed class ManagementStore
                 command.Parameters.AddWithValue("$completed_at_utc", metric.CompletedAtUtc.ToString("O"));
                 command.Parameters.AddWithValue("$duration_ms", metric.Duration.TotalMilliseconds);
                 command.ExecuteNonQuery();
+
+                // Keep the per-group cost balance in sync so GetGroupBalance does not
+                // need a full SUM over request_metrics for every proxied request.
+                if (metric.Cost != 0 && !string.IsNullOrWhiteSpace(metric.UserKeyId))
+                {
+                    foreach (var groupId in GetUserKeyGroupIdsCached(metric.UserKeyId))
+                    {
+                        if (_costTotals.TryGetValue(groupId, out var total))
+                        {
+                            _costTotals[groupId] = total + metric.Cost;
+                        }
+                    }
+                }
             }
         }
         catch (Exception exception) when (exception is SqliteException or IOException or UnauthorizedAccessException)
@@ -902,6 +931,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
             command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
         }
 
         return new GroupInfo(id, groupName, now, now);
@@ -925,6 +955,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$id", groupId);
             command.Parameters.AddWithValue("$name", name.Trim());
             command.Parameters.AddWithValue("$updated_at_utc", DateTimeOffset.UtcNow.ToString("O"));
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -942,6 +973,7 @@ internal sealed class ManagementStore
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM groups WHERE id = $id";
             command.Parameters.AddWithValue("$id", groupId);
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -1098,6 +1130,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$default_context_length", (object?)normalizedDefaultContextLength ?? DBNull.Value);
             command.Parameters.AddWithValue("$disallow_context_change", disallowContextChange);
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
@@ -1119,6 +1152,7 @@ internal sealed class ManagementStore
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM group_members WHERE id = $id";
             command.Parameters.AddWithValue("$id", memberId);
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -1132,36 +1166,22 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT client_id, model, client_pattern, default_context_length
-                FROM group_members
-                WHERE disallow_context_change = 1
-                """;
-
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            foreach (var rule in GetContextChangeRulesCached())
             {
-                var memberClientId = reader.IsDBNull(0) ? null : reader.GetString(0);
-                var memberModel = reader.IsDBNull(1) ? null : reader.GetString(1);
-                var memberPattern = reader.IsDBNull(2) ? null : reader.GetString(2);
-                var defaultContextLength = reader.IsDBNull(3) ? (int?)null : reader.GetInt32(3);
-
-                if (string.IsNullOrWhiteSpace(memberModel))
+                if (string.IsNullOrWhiteSpace(rule.Model))
                 {
                     if (string.IsNullOrWhiteSpace(clientId)
-                        || !GroupAccess.ModelSelectorMatches(memberPattern ?? memberClientId ?? "", clientId))
+                        || !GroupAccess.ModelSelectorMatches(rule.Pattern ?? rule.ClientId ?? "", clientId))
                     {
                         continue;
                     }
 
-                    return new NumCtxHandling(true, defaultContextLength);
+                    return new NumCtxHandling(true, rule.DefaultContextLength);
                 }
 
-                if (GroupAccess.ModelSelectorMatches(memberModel, model))
+                if (GroupAccess.ModelSelectorMatches(rule.Model, model))
                 {
-                    return new NumCtxHandling(true, defaultContextLength);
+                    return new NumCtxHandling(true, rule.DefaultContextLength);
                 }
             }
 
@@ -1178,24 +1198,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT g.id FROM groups g
-                INNER JOIN user_key_groups ukg ON g.id = ukg.group_id
-                WHERE ukg.user_key_id = $user_key_id
-                ORDER BY g.name
-                """;
-            command.Parameters.AddWithValue("$user_key_id", userKeyId);
-
-            var result = new List<string>();
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                result.Add(reader.GetString(0));
-            }
-
-            return result;
+            return GetUserKeyGroupIdsCached(userKeyId);
         }
     }
 
@@ -1243,6 +1246,7 @@ internal sealed class ManagementStore
                 }
 
                 transaction.Commit();
+                InvalidateDerivedCaches();
             }
             catch
             {
@@ -1304,24 +1308,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT g.id FROM groups g
-                INNER JOIN client_key_groups ckg ON g.id = ckg.group_id
-                WHERE ckg.client_key_id = $client_key_id
-                ORDER BY g.name
-                """;
-            command.Parameters.AddWithValue("$client_key_id", clientKeyId);
-
-            var result = new List<string>();
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                result.Add(reader.GetString(0));
-            }
-
-            return result;
+            return GetClientKeyGroupIdsCached(clientKeyId);
         }
     }
 
@@ -1369,6 +1356,7 @@ internal sealed class ManagementStore
                 }
 
                 transaction.Commit();
+                InvalidateDerivedCaches();
             }
             catch
             {
@@ -1430,8 +1418,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            var groupIds = GetUserKeyGroupIdsLocked(userKeyId);
-            return ResolveGroupAccessFromGroupIdsLocked(groupIds);
+            return BuildGroupAccess(GetUserKeyGroupIdsCached(userKeyId));
         }
     }
 
@@ -1444,12 +1431,11 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            var groupIds = GetClientKeyGroupIdsLocked(clientKeyId);
-            return ResolveGroupAccessFromGroupIdsLocked(groupIds);
+            return BuildGroupAccess(GetClientKeyGroupIdsCached(clientKeyId));
         }
     }
 
-    private GroupAccess ResolveGroupAccessFromGroupIdsLocked(IReadOnlyList<string> groupIds)
+    private GroupAccess BuildGroupAccess(IReadOnlyList<string> groupIds)
     {
         if (groupIds.Count == 0)
         {
@@ -1460,69 +1446,52 @@ internal sealed class ManagementStore
         var allClients = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var allModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        var whereClause = string.Join(", ", groupIds.Select((_, index) => $"$group_{index}"));
-        command.CommandText = $"""
-            SELECT gm.client_id, gm.model, gm.client_pattern
-            FROM group_members gm
-            WHERE gm.group_id IN ({whereClause})
-            """;
-        for (var index = 0; index < groupIds.Count; index++)
+        foreach (var groupId in groupIds)
         {
-            command.Parameters.AddWithValue($"$group_{index}", groupIds[index]);
-        }
-
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            var clientId = reader.IsDBNull(0) ? null : reader.GetString(0);
-            var model = reader.IsDBNull(1) ? null : reader.GetString(1);
-            var pattern = reader.IsDBNull(2) ? null : reader.GetString(2);
-
-            if (!string.IsNullOrWhiteSpace(pattern))
+            foreach (var member in GetGroupMembersCached(groupId))
             {
-                Regex? regex = null;
-                try
+                if (!string.IsNullOrWhiteSpace(member.Pattern))
                 {
-                    regex = new Regex(
-                        pattern,
-                        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-                }
-                catch (RegexParseException)
-                {
-                    continue;
-                }
-
-                foreach (var connectedClient in _getConnectedClientIds())
-                {
-                    if (regex.IsMatch(connectedClient))
+                    Regex? regex = null;
+                    try
                     {
-                        if (!string.IsNullOrWhiteSpace(model))
+                        regex = GroupAccess.GetCompiledRegex(member.Pattern);
+                    }
+                    catch (RegexParseException)
+                    {
+                        continue;
+                    }
+
+                    foreach (var connectedClient in _getConnectedClientIds())
+                    {
+                        if (regex.IsMatch(connectedClient))
                         {
-                            clientModels.Add($"{connectedClient}:{model}");
-                        }
-                        else
-                        {
-                            allClients.Add(connectedClient);
+                            if (!string.IsNullOrWhiteSpace(member.Model))
+                            {
+                                clientModels.Add($"{connectedClient}:{member.Model}");
+                            }
+                            else
+                            {
+                                allClients.Add(connectedClient);
+                            }
                         }
                     }
                 }
-            }
-            else if (!string.IsNullOrWhiteSpace(clientId))
-            {
-                if (!string.IsNullOrWhiteSpace(model))
+                else if (!string.IsNullOrWhiteSpace(member.ClientId))
                 {
-                    clientModels.Add($"{clientId}:{model}");
+                    if (!string.IsNullOrWhiteSpace(member.Model))
+                    {
+                        clientModels.Add($"{member.ClientId}:{member.Model}");
+                    }
+                    else
+                    {
+                        allClients.Add(member.ClientId);
+                    }
                 }
-                else
+                else if (!string.IsNullOrWhiteSpace(member.Model))
                 {
-                    allClients.Add(clientId);
+                    allModels.Add(member.Model);
                 }
-            }
-            else if (!string.IsNullOrWhiteSpace(model))
-            {
-                allModels.Add(model);
             }
         }
 
@@ -1605,28 +1574,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT group_id, currency, default_rate_per_1k, refuse_below_balance, enabled, created_at_utc, updated_at_utc
-                FROM group_billing WHERE group_id = $group_id
-                """;
-            command.Parameters.AddWithValue("$group_id", groupId);
-
-            using var reader = command.ExecuteReader();
-            if (!reader.Read())
-            {
-                return null;
-            }
-
-            return new GroupBillingInfo(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetDouble(2),
-                reader.GetDouble(3),
-                reader.GetInt32(4) != 0,
-                ReadDateTimeOffset(reader.GetString(5)),
-                ReadDateTimeOffset(reader.GetString(6)));
+            return GetGroupBillingCached(groupId);
         }
     }
 
@@ -1669,6 +1617,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
             command.Parameters.AddWithValue("$updated_at_utc", now.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
         }
 
         return new GroupBillingInfo(groupId, cur, defaultRatePer1k, refuseBelowBalance, enabled, now, now);
@@ -1683,27 +1632,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                SELECT id, group_id, model_regex, rate_per_1k, created_at_utc
-                FROM group_billing_rules WHERE group_id = $group_id ORDER BY id
-                """;
-            command.Parameters.AddWithValue("$group_id", groupId);
-
-            var result = new List<GroupBillingRule>();
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                result.Add(new GroupBillingRule(
-                    reader.GetInt64(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetDouble(3),
-                    ReadDateTimeOffset(reader.GetString(4))));
-            }
-
-            return result;
+            return GetBillingRulesCached(groupId);
         }
     }
 
@@ -1740,6 +1669,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$rate_per_1k", ratePer1k);
             command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
@@ -1774,6 +1704,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$id", ruleId);
             command.Parameters.AddWithValue("$model_regex", modelRegex.Trim());
             command.Parameters.AddWithValue("$rate_per_1k", ratePer1k);
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -1791,6 +1722,7 @@ internal sealed class ManagementStore
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM group_billing_rules WHERE id = $id";
             command.Parameters.AddWithValue("$id", ruleId);
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -1854,6 +1786,7 @@ internal sealed class ManagementStore
             command.Parameters.AddWithValue("$created_at_utc", now.ToString("O"));
             command.Parameters.AddWithValue("$created_by", string.IsNullOrWhiteSpace(createdBy) ? DBNull.Value : createdBy);
             command.ExecuteNonQuery();
+            InvalidateDerivedCaches();
 
             using var idCommand = connection.CreateCommand();
             idCommand.CommandText = "SELECT last_insert_rowid()";
@@ -1875,6 +1808,7 @@ internal sealed class ManagementStore
             using var command = connection.CreateCommand();
             command.CommandText = "DELETE FROM group_payments WHERE id = $id";
             command.Parameters.AddWithValue("$id", paymentId);
+            InvalidateDerivedCaches();
             return command.ExecuteNonQuery() > 0;
         }
     }
@@ -1888,40 +1822,10 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            using var connection = OpenConnection();
-
-            string currency = "EUR";
-            using (var billingCmd = connection.CreateCommand())
-            {
-                billingCmd.CommandText = "SELECT currency FROM group_billing WHERE group_id = $group_id";
-                billingCmd.Parameters.AddWithValue("$group_id", groupId);
-                var curResult = billingCmd.ExecuteScalar();
-                if (curResult is not null)
-                {
-                    currency = curResult.ToString() ?? "EUR";
-                }
-            }
-
-            double totalPayments = 0;
-            using (var payCmd = connection.CreateCommand())
-            {
-                payCmd.CommandText = "SELECT COALESCE(SUM(amount), 0) FROM group_payments WHERE group_id = $group_id";
-                payCmd.Parameters.AddWithValue("$group_id", groupId);
-                totalPayments = Convert.ToDouble(payCmd.ExecuteScalar());
-            }
-
-            double totalCosts = 0;
-            using (var costCmd = connection.CreateCommand())
-            {
-                costCmd.CommandText = """
-                    SELECT COALESCE(SUM(rm.cost), 0)
-                    FROM request_metrics rm
-                    INNER JOIN user_key_groups ukg ON rm.user_key_id = ukg.user_key_id
-                    WHERE ukg.group_id = $group_id AND rm.user_key_id IS NOT NULL
-                    """;
-                costCmd.Parameters.AddWithValue("$group_id", groupId);
-                totalCosts = Convert.ToDouble(costCmd.ExecuteScalar());
-            }
+            var billing = GetGroupBillingCached(groupId);
+            var currency = billing?.Currency ?? "EUR";
+            var totalPayments = GetPaymentTotalCached(groupId);
+            var totalCosts = GetCostTotalCached(groupId);
 
             return new GroupBalance(groupId, currency, totalPayments, totalCosts, totalPayments - totalCosts);
         }
@@ -1936,6 +1840,11 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
+            if (_billingByUserKey.TryGetValue(userKeyId, out var cached))
+            {
+                return cached;
+            }
+
             using var connection = OpenConnection();
             using var command = connection.CreateCommand();
             command.CommandText = """
@@ -1948,20 +1857,22 @@ internal sealed class ManagementStore
                 """;
             command.Parameters.AddWithValue("$user_key_id", userKeyId);
 
+            GroupBillingInfo? result = null;
             using var reader = command.ExecuteReader();
-            if (!reader.Read())
+            if (reader.Read())
             {
-                return null;
+                result = new GroupBillingInfo(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetDouble(2),
+                    reader.GetDouble(3),
+                    reader.GetInt32(4) != 0,
+                    ReadDateTimeOffset(reader.GetString(5)),
+                    ReadDateTimeOffset(reader.GetString(6)));
             }
 
-            return new GroupBillingInfo(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.GetDouble(2),
-                reader.GetDouble(3),
-                reader.GetInt32(4) != 0,
-                ReadDateTimeOffset(reader.GetString(5)),
-                ReadDateTimeOffset(reader.GetString(6)));
+            _billingByUserKey[userKeyId] = result;
+            return result;
         }
     }
 
@@ -1974,9 +1885,7 @@ internal sealed class ManagementStore
 
         lock (_lock)
         {
-            var rules = ListGroupBillingRulesLocked(groupId);
-            var billing = GetGroupBillingLocked(groupId);
-
+            var billing = GetGroupBillingCached(groupId);
             if (billing is null)
             {
                 return 0;
@@ -1986,11 +1895,11 @@ internal sealed class ManagementStore
 
             if (!string.IsNullOrWhiteSpace(model))
             {
-                foreach (var rule in rules)
+                foreach (var rule in GetBillingRulesCached(groupId))
                 {
                     try
                     {
-                        if (Regex.IsMatch(model, rule.ModelRegex, RegexOptions.IgnoreCase))
+                        if (GroupAccess.GetCompiledRegex(rule.ModelRegex).IsMatch(model))
                         {
                             ratePer1k = rule.RatePer1k;
                             break;
@@ -2218,8 +2127,13 @@ internal sealed class ManagementStore
         }
     }
 
-    public IReadOnlyList<GroupBillingRule> ListGroupBillingRulesLocked(string groupId)
+    private IReadOnlyList<GroupBillingRule> GetBillingRulesCached(string groupId)
     {
+        if (_billingRules.TryGetValue(groupId, out var cached))
+        {
+            return cached;
+        }
+
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -2240,11 +2154,17 @@ internal sealed class ManagementStore
                 ReadDateTimeOffset(reader.GetString(4))));
         }
 
+        _billingRules[groupId] = result;
         return result;
     }
 
-    private GroupBillingInfo? GetGroupBillingLocked(string groupId)
+    private GroupBillingInfo? GetGroupBillingCached(string groupId)
     {
+        if (_groupBilling.TryGetValue(groupId, out var cached))
+        {
+            return cached;
+        }
+
         using var connection = OpenConnection();
         using var command = connection.CreateCommand();
         command.CommandText = """
@@ -2253,20 +2173,189 @@ internal sealed class ManagementStore
             """;
         command.Parameters.AddWithValue("$group_id", groupId);
 
+        GroupBillingInfo? result = null;
         using var reader = command.ExecuteReader();
-        if (!reader.Read())
+        if (reader.Read())
         {
-            return null;
+            result = new GroupBillingInfo(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetDouble(2),
+                reader.GetDouble(3),
+                reader.GetInt32(4) != 0,
+                ReadDateTimeOffset(reader.GetString(5)),
+                ReadDateTimeOffset(reader.GetString(6)));
         }
 
-        return new GroupBillingInfo(
-            reader.GetString(0),
-            reader.GetString(1),
-            reader.GetDouble(2),
-            reader.GetDouble(3),
-            reader.GetInt32(4) != 0,
-            ReadDateTimeOffset(reader.GetString(5)),
-            ReadDateTimeOffset(reader.GetString(6)));
+        _groupBilling[groupId] = result;
+        return result;
+    }
+
+    private double GetPaymentTotalCached(string groupId)
+    {
+        if (_paymentTotals.TryGetValue(groupId, out var total))
+        {
+            return total;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(SUM(amount), 0) FROM group_payments WHERE group_id = $group_id";
+        command.Parameters.AddWithValue("$group_id", groupId);
+        total = Convert.ToDouble(command.ExecuteScalar());
+
+        _paymentTotals[groupId] = total;
+        return total;
+    }
+
+    private double GetCostTotalCached(string groupId)
+    {
+        if (_costTotals.TryGetValue(groupId, out var total))
+        {
+            return total;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COALESCE(SUM(rm.cost), 0)
+            FROM request_metrics rm
+            INNER JOIN user_key_groups ukg ON rm.user_key_id = ukg.user_key_id
+            WHERE ukg.group_id = $group_id AND rm.user_key_id IS NOT NULL
+            """;
+        command.Parameters.AddWithValue("$group_id", groupId);
+        total = Convert.ToDouble(command.ExecuteScalar());
+
+        _costTotals[groupId] = total;
+        return total;
+    }
+
+    private IReadOnlyList<ContextChangeRule> GetContextChangeRulesCached()
+    {
+        if (_contextChangeRulesLoaded)
+        {
+            return _contextChangeRules;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT client_id, model, client_pattern, default_context_length
+            FROM group_members
+            WHERE disallow_context_change = 1
+            """;
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            _contextChangeRules.Add(new ContextChangeRule(
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetInt32(3)));
+        }
+
+        _contextChangeRulesLoaded = true;
+        return _contextChangeRules;
+    }
+
+    private IReadOnlyList<string> GetUserKeyGroupIdsCached(string userKeyId)
+    {
+        if (_userKeyGroupIds.TryGetValue(userKeyId, out var cached))
+        {
+            return cached;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT g.id FROM groups g
+            INNER JOIN user_key_groups ukg ON g.id = ukg.group_id
+            WHERE ukg.user_key_id = $user_key_id
+            ORDER BY g.name
+            """;
+        command.Parameters.AddWithValue("$user_key_id", userKeyId);
+
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        _userKeyGroupIds[userKeyId] = result;
+        return result;
+    }
+
+    private IReadOnlyList<string> GetClientKeyGroupIdsCached(string clientKeyId)
+    {
+        if (_clientKeyGroupIds.TryGetValue(clientKeyId, out var cached))
+        {
+            return cached;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT g.id FROM groups g
+            INNER JOIN client_key_groups ckg ON g.id = ckg.group_id
+            WHERE ckg.client_key_id = $client_key_id
+            ORDER BY g.name
+            """;
+        command.Parameters.AddWithValue("$client_key_id", clientKeyId);
+
+        var result = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        _clientKeyGroupIds[clientKeyId] = result;
+        return result;
+    }
+
+    private IReadOnlyList<GroupMemberRow> GetGroupMembersCached(string groupId)
+    {
+        if (_groupMembers.TryGetValue(groupId, out var cached))
+        {
+            return cached;
+        }
+
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT client_id, model, client_pattern FROM group_members WHERE group_id = $group_id";
+        command.Parameters.AddWithValue("$group_id", groupId);
+
+        var rows = new List<GroupMemberRow>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            rows.Add(new GroupMemberRow(
+                reader.IsDBNull(0) ? null : reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2)));
+        }
+
+        _groupMembers[groupId] = rows;
+        return rows;
+    }
+
+    // Clears every derived cache. Called on any write so hot-path reads never
+    // serve stale access, billing or balance data.
+    private void InvalidateDerivedCaches()
+    {
+        _clientControls.Clear();
+        _userKeyGroupIds.Clear();
+        _clientKeyGroupIds.Clear();
+        _groupMembers.Clear();
+        _groupBilling.Clear();
+        _billingRules.Clear();
+        _billingByUserKey.Clear();
+        _paymentTotals.Clear();
+        _costTotals.Clear();
+        _contextChangeRules.Clear();
+        _contextChangeRulesLoaded = false;
     }
 
     private GroupBillingInfo? ResolveBillingForUserKeyForClientLocked(string clientId)
@@ -2300,38 +2389,49 @@ internal sealed class ManagementStore
             ReadDateTimeOffset(reader.GetString(6)));
     }
 
-    private IReadOnlyList<string> GetUserKeyGroupIdsLocked(string userKeyId)
-    {
-        using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT group_id FROM user_key_groups WHERE user_key_id = $user_key_id";
-        command.Parameters.AddWithValue("$user_key_id", userKeyId);
+    private sealed record GroupMemberRow(string? ClientId, string? Model, string? Pattern);
 
-        var result = new List<string>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+    private sealed record ContextChangeRule(string? ClientId, string? Model, string? Pattern, int? DefaultContextLength);
+
+    private sealed class ClientControlRow
+    {
+        public ClientControlRow(
+            DateTimeOffset? disabledUntilUtc,
+            bool disabledManually,
+            string? disabledReason,
+            DateTimeOffset? disabledFromUtc,
+            int warmth)
         {
-            result.Add(reader.GetString(0));
+            DisabledUntilUtc = disabledUntilUtc;
+            DisabledManually = disabledManually;
+            DisabledReason = disabledReason;
+            DisabledFromUtc = disabledFromUtc;
+            Warmth = warmth;
         }
 
-        return result;
-    }
+        public DateTimeOffset? DisabledUntilUtc { get; }
+        public bool DisabledManually { get; }
+        public string? DisabledReason { get; }
+        public DateTimeOffset? DisabledFromUtc { get; }
+        public int Warmth { get; }
 
-    private IReadOnlyList<string> GetClientKeyGroupIdsLocked(string clientKeyId)
-    {
-        using var connection = OpenConnection();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT group_id FROM client_key_groups WHERE client_key_id = $client_key_id";
-        command.Parameters.AddWithValue("$client_key_id", clientKeyId);
-
-        var result = new List<string>();
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        public ClientAccess ToAccess()
         {
-            result.Add(reader.GetString(0));
-        }
+            var now = DateTimeOffset.UtcNow;
+            var isScheduled = DisabledFromUtc > now;
 
-        return result;
+            if (DisabledManually && !isScheduled)
+            {
+                return new ClientAccess(true, DisabledFromUtc, null, true, DisabledReason, Warmth);
+            }
+
+            if (!isScheduled && DisabledUntilUtc is { } until && until > now)
+            {
+                return new ClientAccess(true, DisabledFromUtc, until, false, DisabledReason, Warmth);
+            }
+
+            return new ClientAccess(false, DisabledFromUtc, DisabledUntilUtc, false, DisabledReason, Warmth);
+        }
     }
 
     private Func<IEnumerable<string>> _getConnectedClientIds = () => [];
@@ -3014,6 +3114,8 @@ internal sealed record ClientKeyGroupInfo(
 
 internal sealed class GroupAccess
 {
+    private static readonly ConcurrentDictionary<string, Regex> CompiledRegexes = new();
+
     public static GroupAccess Unrestricted { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>(), isUnrestricted: true);
 
     public static GroupAccess Empty { get; } = new(new HashSet<string>(), new HashSet<string>(), new HashSet<string>());
@@ -3095,13 +3197,16 @@ internal sealed class GroupAccess
 
         try
         {
-            return Regex.IsMatch(trimmedModel, trimmedSelector, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            return GetCompiledRegex(trimmedSelector).IsMatch(trimmedModel);
         }
         catch (ArgumentException)
         {
             return false;
         }
     }
+
+    public static Regex GetCompiledRegex(string pattern) =>
+        CompiledRegexes.GetOrAdd(pattern, p => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant));
 
     private static string StripLatestTag(string model) =>
         model.EndsWith(":latest", StringComparison.OrdinalIgnoreCase)

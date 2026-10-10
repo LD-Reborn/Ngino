@@ -247,7 +247,7 @@ internal static class KeepaliveCoordinator
 
         try
         {
-            return Regex.IsMatch(clientId, member.ClientPattern, RegexOptions.IgnoreCase | RegexOptions.Compiled);
+            return GroupAccess.GetCompiledRegex(member.ClientPattern).IsMatch(clientId);
         }
         catch (RegexParseException)
         {
